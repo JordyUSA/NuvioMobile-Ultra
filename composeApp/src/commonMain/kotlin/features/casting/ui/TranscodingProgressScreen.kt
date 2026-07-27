@@ -2,6 +2,7 @@ package com.nuvio.app.features.casting.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
@@ -13,6 +14,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nuvio.app.features.casting.model.*
+
+// Pure KMP replacement for Double formatting if needed elsewhere in UI
+fun Double.formatDecimal(decimals: Int = 2): String {
+    val integerPart = this.toLong()
+    var fractionalPart = ((this - integerPart) * 100).toLong()
+    if (fractionalPart < 0) fractionalPart = -fractionalPart
+    return "$integerPart.${fractionalPart.toString().padStart(decimals, '0')}"
+}
 
 @Composable
 fun TranscodingProgressScreen(
@@ -56,9 +65,11 @@ fun TranscodingProgressScreen(
                 }
             }
 
-            Divider(modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp), color = Color(0xFF333333))
+            HorizontalDivider(
+                modifier = Modifier.fillMaxWidth(),
+                thickness = 1.dp,
+                color = Color(0xFF333333)
+            )
 
             // Status info
             Column(
@@ -184,13 +195,14 @@ private fun StatusRow(label: String, value: String) {
 }
 
 private fun formatDuration(millis: Long): String {
-    val seconds = millis / 1000
-    val minutes = seconds / 60
-    val hours = minutes / 60
+    val totalSeconds = millis / 1000
+    val seconds = (totalSeconds % 60).toString().padStart(2, '0')
+    val minutes = ((totalSeconds / 60) % 60).toString().padStart(2, '0')
+    val hours = (totalSeconds / 3600).toString().padStart(2, '0')
 
     return when {
-        hours > 0 -> String.format("%02d:%02d:%02d", hours, minutes % 60, seconds % 60)
-        minutes > 0 -> String.format("%02d:%02d", minutes, seconds % 60)
-        else -> String.format("%02ds", seconds)
+        totalSeconds >= 3600 -> "$hours:$minutes:$seconds"
+        totalSeconds >= 60 -> "$minutes:$seconds"
+        else -> "${totalSeconds}s"
     }
 }
