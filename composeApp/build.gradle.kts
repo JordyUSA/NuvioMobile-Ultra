@@ -410,6 +410,7 @@ kotlin {
                 if (iosDistribution == "full" && nuvioEngineSliceDirectory.resolve("libCNuvioEngine.a").isFile) {
                     create("nuvioengine") {
                         defFile(project.file("src/nativeInterop/cinterop/nuvioengine.def"))
+                        packageName("com.nuvio.app.features.p2p.native")
                         compilerOpts("-I${nuvioEngineSliceDirectory.resolve("Headers").absolutePath}")
                         extraOpts("-libraryPath", nuvioEngineSliceDirectory.absolutePath)
                     }
