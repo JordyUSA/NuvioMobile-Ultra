@@ -1,5 +1,6 @@
 package com.nuvio.app.features.casting.model
 
+import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -13,7 +14,7 @@ data class TranscodingJob(
     val state: TranscodingState = TranscodingState.PENDING,
     val progress: Int = 0,
     val estimatedTimeRemaining: Long = 0L,
-    val createdAt: Long = System.currentTimeMillis(),
+    val createdAt: Long = Clock.System.now().toEpochMilliseconds(), // ✅ Fixed for KMP / iOS
     val startedAt: Long? = null,
     val completedAt: Long? = null,
     val error: String? = null,
