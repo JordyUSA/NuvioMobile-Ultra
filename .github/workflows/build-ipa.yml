@@ -1,0 +1,73 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches:
+      - feature/chromecast-hw-transcoding
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+    
+    - name: Setup Gradle
+      uses: gradle/gradle-build-action@v2
+    
+    - name: Build iOS Release
+      run: |
+        cd composeApp
+        ./gradlew :composeApp:linkReleaseFrameworkIosArm64
+        ./gradlew :composeApp:linkReleaseFrameworkIosSimulatorArm64
+      continue-on-error: false
+    
+    - name: Setup iOS project
+      run: |
+        cd iosApp
+        pod install --repo-update
+    
+    - name: Build IPA for device
+      run: |
+        cd iosApp
+        xcodebuild \
+          -workspace NuvioMobile.xcworkspace \
+          -scheme NuvioMobile \
+          -configuration Release \
+          -derivedDataPath build \
+          -destination 'generic/platform=iOS' \
+          -archivePath build/NuvioMobile.xcarchive \
+          archive
+    
+    - name: Export IPA
+      run: |
+        xcodebuild \
+          -exportArchive \
+          -archivePath iosApp/build/NuvioMobile.xcarchive \
+          -exportOptionsPlist .github/ExportOptions.plist \
+          -exportPath iosApp/build/
+    
+    - name: Upload IPA as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: NuvioMobile.ipa
+        path: iosApp/build/NuvioMobile.ipa
+        retention-days: 30
+    
+    - name: Generate download link
+      run: |
+        echo "## 📱 iOS IPA Build Complete" >> $GITHUB_STEP_SUMMARY
+        echo "The IPA file is ready for download from the Artifacts section." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Sideloading Instructions:" >> $GITHUB_STEP_SUMMARY
+        echo "1. Download the IPA file from artifacts" >> $GITHUB_STEP_SUMMARY
+        echo "2. Use AltStore or Sideloadly to sideload the IPA" >> $GITHUB_STEP_SUMMARY
+        echo "3. Install on your iPhone" >> $GITHUB_STEP_SUMMARY
