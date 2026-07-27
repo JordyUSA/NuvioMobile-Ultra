@@ -539,6 +539,7 @@ kotlin {
             implementation(libs.supabase.functions)
             implementation(libs.supabase.realtime)
             implementation(libs.reorderable)
+            implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.0")
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
