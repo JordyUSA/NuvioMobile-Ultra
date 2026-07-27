@@ -13,6 +13,11 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # FIX 1: Fetches full git history and tags to resolve Git exit code 128
+
+    - name: Mark workspace as safe directory
+      run: git config --global --add safe.directory "$GITHUB_WORKSPACE" # Backup safety check for runner git permissions
     
     - name: Set up Java
       uses: actions/setup-java@v4
@@ -21,14 +26,13 @@ jobs:
         java-version: '17'
     
     - name: Setup Gradle
-      uses: gradle/gradle-build-action@v4
+      uses: gradle/actions/setup-gradle@v4 # FIX 3: Replaced deprecated gradle-build-action to fix cache 400 errors
     
     - name: Build iOS Release
       run: |
-        cd composeApp
         ./gradlew :composeApp:linkReleaseFrameworkIosArm64
         ./gradlew :composeApp:linkReleaseFrameworkIosSimulatorArm64
-      continue-on-error: false
+      continue-on-error: false # FIX 2: Removed 'cd composeApp' so it calls ./gradlew from the root folder
     
     - name: Setup iOS project
       run: |
