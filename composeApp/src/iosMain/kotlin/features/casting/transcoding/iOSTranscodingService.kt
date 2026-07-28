@@ -2,6 +2,7 @@ package com.nuvio.app.features.casting.transcoding
 
 import com.nuvio.app.features.casting.model.*
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.readValue
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -262,7 +263,8 @@ class VideoToolboxTranscoder(
                 return@withContext Result.failure(Exception("Failed to start writing: ${writer.error}"))
             }
 
-            writer.startSessionAtSourceTime(kCMTimeZero)
+            // kCMTimeZero is a C global struct, so it must be read into a CValue to pass by value.
+            writer.startSessionAtSourceTime(kCMTimeZero.readValue())
             updateProgress(TranscodingState.DECODING, 5)
 
             updateProgress(TranscodingState.ENCODING, 10)
@@ -299,7 +301,7 @@ class VideoToolboxTranscoder(
         }
     }
 
-    private fun configureVideoSettings(videoTrack: AVAssetTrack): Map<Any?, Any> {
+    private fun configureVideoSettings(videoTrack: AVAssetTrack): Map<Any?, Any?> {
         val targetWidth: Int
         val targetHeight: Int
 
@@ -328,11 +330,11 @@ class VideoToolboxTranscoder(
             else -> AVVideoCodecTypeH264
         }
 
-        return mapOf<Any?, Any>(
+        return mapOf<Any?, Any?>(
             AVVideoCodecKey to codecType,
             AVVideoWidthKey to NSNumber(int = targetWidth),
             AVVideoHeightKey to NSNumber(int = targetHeight),
-            AVVideoCompressionPropertiesKey to mapOf<Any?, Any>(
+            AVVideoCompressionPropertiesKey to mapOf<Any?, Any?>(
                 AVVideoAverageBitRateKey to NSNumber(longLong = job.targetBitrate),
                 AVVideoMaxKeyFrameIntervalKey to NSNumber(int = 30)
             )

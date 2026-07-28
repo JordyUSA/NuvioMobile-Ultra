@@ -1,7 +1,10 @@
+@file:OptIn(ExperimentalTime::class)
+
 package com.nuvio.app.features.casting.model
 
-import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 
 @Serializable
 data class TranscodingJob(
