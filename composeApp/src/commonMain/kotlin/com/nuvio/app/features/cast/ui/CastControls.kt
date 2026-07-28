@@ -17,7 +17,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -29,7 +28,6 @@ import com.nuvio.app.features.cast.CastDevice
 import com.nuvio.app.features.cast.CastIncompatibility
 import com.nuvio.app.features.cast.CastPlatform
 import com.nuvio.app.features.cast.CastStreamRequest
-import kotlinx.coroutines.launch
 
 /**
  * Whether the Cast affordance should be shown at all.
@@ -117,15 +115,16 @@ fun CastDeliveryEffect(
     onFinished: (Result<Unit>) -> Unit = {},
 ) {
     val connection by CastPlatform.connection.collectAsState()
-    val scope = rememberCoroutineScope()
     var lastCastUrl by remember { mutableStateOf<String?>(null) }
 
+    // The work runs in LaunchedEffect's own scope, so leaving the player cancels an in-flight
+    // transcode rather than leaving it running against a discarded composition.
     LaunchedEffect(connection, request?.url) {
         val target = request ?: return@LaunchedEffect
         if (connection !is CastConnectionState.Connected) return@LaunchedEffect
         if (lastCastUrl == target.url) return@LaunchedEffect
         lastCastUrl = target.url
-        scope.launch { onFinished(CastDelivery.cast(target)) }
+        onFinished(CastDelivery.cast(target))
     }
 }
 
