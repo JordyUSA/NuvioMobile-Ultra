@@ -485,8 +485,12 @@ kotlin {
                 implementation(libs.androidx.media3.container)
                 implementation(libs.androidx.media3.extractor)
                 implementation(libs.mpv.android.lib)
-                // Google Cast SDK for Chromecast support
-                implementation("com.google.android.gms:play-services-cast-framework:21.4.0")
+                // Chromecast: the Cast SDK itself, MediaRouter for receiver discovery, and
+                // Transformer/Effect for the remux and transcode paths.
+                implementation(libs.play.services.cast.framework)
+                implementation(libs.androidx.mediarouter)
+                implementation(libs.androidx.media3.transformer)
+                implementation(libs.androidx.media3.effect)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
                 implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("lib-*.aar"))))
                 if (androidDistribution == "full") {
