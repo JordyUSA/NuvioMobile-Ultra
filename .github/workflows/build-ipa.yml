@@ -9,7 +9,14 @@ on:
 jobs:
   build:
     runs-on: macos-latest
-    
+
+    env:
+      # The "full" distribution links against nuvio-engine's NuvioEngine.xcframework, which
+      # lives outside this repository and is never present on CI. Build the appstore
+      # distribution instead, whose iosAppStore source set stubs out the native P2P engine.
+      NUVIO_IOS_DISTRIBUTION: appstore
+      GRADLE_OPTS: -Xmx6g -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=2g
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -18,62 +25,79 @@ jobs:
 
     - name: Mark workspace as safe directory
       run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-    
+
+    # MPVKit is referenced by iosApp.xcodeproj as a local Swift package at ../MPVKit.
+    # Only this submodule is initialised: several other gitlinks in the index have no
+    # .gitmodules entry, so a blanket `submodules: true` checkout aborts on them.
+    - name: Checkout MPVKit submodule
+      run: git submodule update --init --depth 1 MPVKit
+
     - name: Set up Java
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
-    
+
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
 
     # Fixes: Task :composeApp:generateRuntimeConfigs FAILED
     - name: Create local.properties
       run: touch local.properties
-    
-    - name: Build iOS Release
+
+    # Fail fast with readable Kotlin diagnostics before handing off to xcodebuild,
+    # which would otherwise bury compiler errors inside the Gradle build-phase log.
+    - name: Compile Kotlin iOS framework
+      run: ./gradlew :composeApp:linkReleaseFrameworkIosArm64
+
+    # There is no Podfile in this project: iosApp.xcodeproj is built directly, and its
+    # build phase invokes :composeApp:embedAndSignAppleFrameworkForXcode itself.
+    - name: Archive app (unsigned)
       run: |
-        ./gradlew :composeApp:linkReleaseFrameworkIosArm64
-        ./gradlew :composeApp:linkReleaseFrameworkIosSimulatorArm64
-      continue-on-error: false
-    
-    - name: Setup iOS project
-      run: |
-        cd iosApp
-        pod install --repo-update
-    
-    - name: Build IPA for device
-      run: |
-        cd iosApp
         xcodebuild \
-          -workspace NuvioMobile.xcworkspace \
-          -scheme NuvioMobile \
+          -project iosApp/iosApp.xcodeproj \
+          -scheme iosApp \
           -configuration Release \
-          -derivedDataPath build \
+          -derivedDataPath ios-build/DerivedData \
           -destination 'generic/platform=iOS' \
-          -archivePath build/NuvioMobile.xcarchive \
+          -archivePath ios-build/NuvioMobile.xcarchive \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGN_ENTITLEMENTS="" \
+          DEVELOPMENT_TEAM="" \
           archive
-    
-    - name: Export IPA
+
+    # An unsigned archive cannot go through -exportArchive, which insists on resolving a
+    # signing identity. Sideloading tools re-sign the payload anyway, so package by hand.
+    - name: Package IPA
       run: |
-        xcodebuild \
-          -exportArchive \
-          -archivePath iosApp/build/NuvioMobile.xcarchive \
-          -exportOptionsPlist .github/ExportOptions.plist \
-          -exportPath iosApp/build/
-    
+        set -euo pipefail
+        app_path="$(find ios-build/NuvioMobile.xcarchive/Products/Applications \
+          -maxdepth 1 -name '*.app' -print -quit)"
+        if [ -z "$app_path" ]; then
+          echo "::error::No .app found in the archive"
+          exit 1
+        fi
+        echo "Packaging $app_path"
+        rm -rf ios-build/ipa && mkdir -p ios-build/ipa/Payload
+        cp -R "$app_path" ios-build/ipa/Payload/
+        (cd ios-build/ipa && zip -qry ../NuvioMobile.ipa Payload)
+        ls -lh ios-build/NuvioMobile.ipa
+
     - name: Upload IPA as artifact
       uses: actions/upload-artifact@v4
       with:
         name: NuvioMobile.ipa
-        path: iosApp/build/NuvioMobile.ipa
+        path: ios-build/NuvioMobile.ipa
         retention-days: 30
-    
+
     - name: Generate download link
       run: |
         echo "## 📱 iOS IPA Build Complete" >> $GITHUB_STEP_SUMMARY
         echo "The IPA file is ready for download from the Artifacts section." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "This build is **unsigned** — your sideloading tool signs it with your own account." >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Sideloading Instructions:" >> $GITHUB_STEP_SUMMARY
         echo "1. Download the IPA file from artifacts" >> $GITHUB_STEP_SUMMARY

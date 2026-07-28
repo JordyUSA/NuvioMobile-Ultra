@@ -1,6 +1,7 @@
 package com.nuvio.app.features.casting.transcoding
 
 import com.nuvio.app.features.casting.model.*
+import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -8,8 +9,11 @@ import kotlinx.coroutines.flow.asSharedFlow
 import platform.Foundation.*
 import platform.AVFoundation.*
 import platform.CoreMedia.*
-import platform.VideoToolbox.*
-import kotlin.math.roundToInt
+import platform.UIKit.UIDevice
+import kotlin.coroutines.resume
+
+/** `java.lang.System` is unavailable on Kotlin/Native, so read the clock through Foundation. */
+private fun nowMillis(): Long = (NSDate().timeIntervalSince1970 * 1000.0).toLong()
 
 class iOSTranscodingService(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + Job())
@@ -58,7 +62,7 @@ class iOSTranscodingService(
                 audioCodec = AudioCodec.AAC,
                 state = TranscodingState.PENDING,
                 useHardwareAcceleration = supportsHardwareAcceleration(targetCodec),
-                startedAt = System.currentTimeMillis()
+                startedAt = nowMillis()
             )
 
             activeJobs[jobId] = job
@@ -67,7 +71,7 @@ class iOSTranscodingService(
 
             val transcodingTask = scope.launch {
                 try {
-                    val outputPath = \"$cacheDir/transcoded_$jobId.mp4\"
+                    val outputPath = "$cacheDir/transcoded_$jobId.mp4"
                     val transcoder = VideoToolboxTranscoder(
                         sourceFile = sourceFile,
                         outputFile = outputPath,
@@ -85,7 +89,7 @@ class iOSTranscodingService(
                     result.onSuccess { outputPath ->
                         val completedJob = job.copy(
                             state = TranscodingState.COMPLETED,
-                            completedAt = System.currentTimeMillis(),
+                            completedAt = nowMillis(),
                             outputPath = outputPath,
                             progress = 100
                         )
@@ -97,7 +101,7 @@ class iOSTranscodingService(
                         val failedJob = job.copy(
                             state = TranscodingState.FAILED,
                             error = error.message,
-                            completedAt = System.currentTimeMillis()
+                            completedAt = nowMillis()
                         )
                         activeJobs[jobId] = failedJob
                         println("$TAG: Transcoding failed: ${error.message}")
@@ -106,7 +110,7 @@ class iOSTranscodingService(
                     println("$TAG: Transcoding cancelled: $jobId")
                     activeJobs[jobId] = job.copy(
                         state = TranscodingState.CANCELLED,
-                        completedAt = System.currentTimeMillis()
+                        completedAt = nowMillis()
                     )
                 } finally {
                     transcoders.remove(jobId)
@@ -134,7 +138,7 @@ class iOSTranscodingService(
             transcodingTasks[jobId]?.cancel()
             activeJobs[jobId] = activeJobs[jobId]?.copy(
                 state = TranscodingState.CANCELLED,
-                completedAt = System.currentTimeMillis()
+                completedAt = nowMillis()
             ) ?: throw IllegalArgumentException("Job not found")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -220,6 +224,7 @@ class iOSTranscodingService(
     }
 }
 
+@OptIn(ExperimentalForeignApi::class)
 class VideoToolboxTranscoder(
     private val sourceFile: String,
     private val outputFile: String,
@@ -235,12 +240,12 @@ class VideoToolboxTranscoder(
             println("$TAG: Starting transcode for ${job.id}")
             updateProgress(TranscodingState.INITIALIZING, 0)
 
-            val asset = AVURLAsset(NSURL(fileURLWithPath = sourceFile))
+            val asset = AVURLAsset(uRL = NSURL(fileURLWithPath = sourceFile), options = null)
             val videoTrack = asset.tracksWithMediaType(AVMediaTypeVideo).firstOrNull() as? AVAssetTrack
                 ?: return@withContext Result.failure(Exception("No video track found"))
 
             val outputURL = NSURL(fileURLWithPath = outputFile)
-            val writer = AVAssetWriter(URL = outputURL, fileType = AVFileTypeMPEG4)
+            val writer = AVAssetWriter(uRL = outputURL, fileType = AVFileTypeMPEG4, error = null)
 
             val videoSettings = configureVideoSettings(videoTrack)
             val videoInput = AVAssetWriterInput(mediaType = AVMediaTypeVideo, outputSettings = videoSettings)
@@ -263,13 +268,19 @@ class VideoToolboxTranscoder(
             updateProgress(TranscodingState.ENCODING, 10)
             updateProgress(TranscodingState.MUXING, 95)
 
-            writer.finishWritingWithCompletionHandler {
-                if (writer.status == AVAssetWriterStatusFailed) {
-                    println("$TAG: Writing failed: ${writer.error}")
-                }
+            videoInput.markAsFinished()
+            suspendCancellableCoroutine<Unit> { continuation ->
+                writer.finishWritingWithCompletionHandler { continuation.resume(Unit) }
             }
 
+            val writerFailed = writer.status == AVAssetWriterStatusFailed
+            val writerError = writer.error
             assetWriter = null
+
+            if (writerFailed) {
+                println("$TAG: Writing failed: $writerError")
+                return@withContext Result.failure(Exception("Failed to finish writing: $writerError"))
+            }
 
             if (isCancelled) {
                 NSFileManager.defaultManager.removeItemAtPath(outputFile, error = null)
@@ -288,7 +299,7 @@ class VideoToolboxTranscoder(
         }
     }
 
-    private fun configureVideoSettings(videoTrack: AVAssetTrack): Map<*, *> {
+    private fun configureVideoSettings(videoTrack: AVAssetTrack): Map<Any?, Any> {
         val targetWidth: Int
         val targetHeight: Int
 
@@ -311,25 +322,25 @@ class VideoToolboxTranscoder(
             }
         }
 
+        // AVVideoCodecKey expects an AVVideoCodecType string, not a CMVideoCodecType constant.
         val codecType = when (job.targetCodec) {
-            VideoCodec.H264 -> kCMVideoCodecType_H264
-            VideoCodec.H265 -> kCMVideoCodecType_HEVC
-            else -> kCMVideoCodecType_H264
+            VideoCodec.H265 -> AVVideoCodecTypeHEVC
+            else -> AVVideoCodecTypeH264
         }
 
-        return mapOf(
+        return mapOf<Any?, Any>(
             AVVideoCodecKey to codecType,
             AVVideoWidthKey to NSNumber(int = targetWidth),
             AVVideoHeightKey to NSNumber(int = targetHeight),
-            AVVideoCompressionPropertiesKey to mapOf(
-                AVVideoAverageBitRateKey to NSNumber(long = job.targetBitrate),
+            AVVideoCompressionPropertiesKey to mapOf<Any?, Any>(
+                AVVideoAverageBitRateKey to NSNumber(longLong = job.targetBitrate),
                 AVVideoMaxKeyFrameIntervalKey to NSNumber(int = 30)
-            ) as Map<*, *>
-        ) as Map<*, *>
+            )
+        )
     }
 
     private fun updateProgress(state: TranscodingState, progress: Int) {
-        val now = System.currentTimeMillis()
+        val now = nowMillis()
         val elapsed = (now - (job.startedAt ?: now))
         val remaining = if (progress > 0) {
             ((elapsed / progress.toFloat()) * (100 - progress)).toLong()

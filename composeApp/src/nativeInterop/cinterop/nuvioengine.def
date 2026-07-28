@@ -1,5 +1,3 @@
-headers = nuvio_engine.h
+headers = nuvio_engine/nuvio_engine.h
 package = com.nuvio.app.features.p2p.native
-
-compilerOpts = -I${projectDir}/src/nativeInterop/cinterop/headers
-linkerOpts = -L${projectDir}/src/nativeInterop/cinterop/libs/ios -lnuvio_engine
+staticLibraries = libCNuvioEngine.a
