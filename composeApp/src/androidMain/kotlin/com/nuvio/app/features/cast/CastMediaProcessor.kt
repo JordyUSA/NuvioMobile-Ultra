@@ -39,6 +39,9 @@ interface CastMediaProcessor {
         sourceUrl: String,
         plan: CastDeliveryPlan,
         output: File,
+        /** Source duration, used to turn encoder progress into a percentage. */
+        durationMs: Long?,
+        headers: Map<String, String> = emptyMap(),
         onProgress: (Int) -> Unit = {},
     ): Result<File>
 
@@ -62,6 +65,8 @@ class Media3CastMediaProcessor(private val context: Context) : CastMediaProcesso
         sourceUrl: String,
         plan: CastDeliveryPlan,
         output: File,
+        durationMs: Long?,
+        headers: Map<String, String>,
         onProgress: (Int) -> Unit,
     ): Result<File> = withContext(Dispatchers.Main) {
         output.parentFile?.mkdirs()
@@ -123,5 +128,48 @@ class Media3CastMediaProcessor(private val context: Context) : CastMediaProcesso
     override fun cancel() {
         transformer?.let { runCatching { it.cancel() } }
         transformer = null
+    }
+}
+
+/**
+ * Chooses the processor for this build.
+ *
+ * FFmpeg leads when it is bundled, because it decodes formats MediaCodec refuses. Media3
+ * remains behind it as a fallback: `h264_mediacodec` is not available on every handset, and
+ * when it is missing the Transformer path still handles the ordinary cases.
+ */
+fun castMediaProcessor(context: Context): CastMediaProcessor {
+    val media3 = Media3CastMediaProcessor(context)
+    val ffmpeg = createFFmpegCastProcessor(context) ?: return media3
+    return FallbackCastMediaProcessor(primary = ffmpeg, secondary = media3)
+}
+
+/** Runs [secondary] if [primary] fails, so one unsupported encoder does not sink the cast. */
+private class FallbackCastMediaProcessor(
+    private val primary: CastMediaProcessor,
+    private val secondary: CastMediaProcessor,
+) : CastMediaProcessor {
+
+    private var active: CastMediaProcessor = primary
+
+    override suspend fun process(
+        sourceUrl: String,
+        plan: CastDeliveryPlan,
+        output: File,
+        durationMs: Long?,
+        headers: Map<String, String>,
+        onProgress: (Int) -> Unit,
+    ): Result<File> {
+        active = primary
+        val first = primary.process(sourceUrl, plan, output, durationMs, headers, onProgress)
+        if (first.isSuccess) return first
+
+        android.util.Log.w("CastProcessor", "Primary processor failed, retrying", first.exceptionOrNull())
+        active = secondary
+        return secondary.process(sourceUrl, plan, output, durationMs, headers, onProgress)
+    }
+
+    override fun cancel() {
+        active.cancel()
     }
 }

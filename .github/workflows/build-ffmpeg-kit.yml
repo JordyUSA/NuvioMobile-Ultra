@@ -1,0 +1,155 @@
+name: Build FFmpegKit AAR
+
+# FFmpegKit was retired in January 2025 and its prebuilt artifacts were removed from Maven
+# Central, but the source and build scripts remain available. This job compiles the native
+# libraries ourselves and publishes the AAR as an artifact.
+#
+# Deliberately manual: a full build takes well over an hour, and the output only needs
+# rebuilding when the configuration below changes. Download the artifact, drop it into
+# composeApp/libs/ as lib-ffmpeg-kit-<version>.aar, and it is picked up automatically by the
+# existing fileTree("libs", "lib-*.aar") dependency.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_kit_ref:
+        description: 'ffmpeg-kit git ref to build'
+        required: true
+        default: 'v6.0'
+      include_armv7:
+        description: 'Also build armeabi-v7a (adds ~15 min; only needed for 32-bit devices)'
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The native build dominates; six hours is the ceiling GitHub allows anyway.
+    timeout-minutes: 350
+
+    env:
+      # FFmpegKit is sensitive to the NDK version: newer toolchains drop the headers and
+      # linker behaviour its scripts expect. r25c is the newest release it builds cleanly on.
+      NDK_VERSION: '25.2.9519653'
+      # Matches android-minSdk in gradle/libs.versions.toml.
+      API_LEVEL: '24'
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Install build tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake libtool pkg-config curl git doxygen nasm cmake \
+            gcc gperf texinfo yasm bison autogen patch meson ninja-build \
+            ragel groff gtk-doc-tools libtasn1-bin libtasn1-6-dev
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Android NDK ${{ env.NDK_VERSION }}
+        run: |
+          set -euo pipefail
+          sdkmanager --install "ndk;${NDK_VERSION}" "platforms;android-${API_LEVEL}"
+          echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Checkout ffmpeg-kit
+        uses: actions/checkout@v4
+        with:
+          repository: arthenica/ffmpeg-kit
+          ref: ${{ inputs.ffmpeg_kit_ref }}
+          path: ffmpeg-kit
+
+      - name: Build
+        working-directory: ffmpeg-kit
+        run: |
+          set -euo pipefail
+
+          # Only arm architectures are built. Every Cast-capable Android phone in use is arm,
+          # and dropping the x86 slices roughly halves both build time and payload size.
+          args=(
+            "--api-level=${API_LEVEL}"
+            "--disable-x86"
+            "--disable-x86-64"
+            # Hardware H.264/HEVC encode and decode through MediaCodec. This is what makes
+            # bundling FFmpeg worthwhile over software encoding, and it is also what lets us
+            # stay off libx264 and therefore off the GPL.
+            "--enable-android-media-codec"
+            # TLS for https:// sources, and Matroska/subtitle handling.
+            "--enable-openssl"
+            "--enable-libass"
+            "--enable-fontconfig"
+            "--enable-freetype"
+            "--enable-fribidi"
+          )
+
+          if [ "${{ inputs.include_armv7 }}" != "true" ]; then
+            args+=("--disable-arm-v7a" "--disable-arm-v7a-neon")
+          fi
+
+          # NOTE: --enable-gpl is intentionally absent. It would pull in x264/x265 and force
+          # the GPL onto the whole distributed application. Encoding goes through MediaCodec
+          # instead, so the LGPL build is sufficient.
+          echo "Building with: ${args[*]}"
+          ./android.sh "${args[@]}"
+
+      - name: Locate the AAR
+        id: locate
+        working-directory: ffmpeg-kit
+        run: |
+          set -euo pipefail
+          aar="$(find prebuilt -name 'ffmpeg-kit.aar' -print -quit)"
+          if [ -z "$aar" ]; then
+            echo "::error::android.sh finished but produced no AAR"
+            tail -n 100 build.log 2>/dev/null || true
+            exit 1
+          fi
+          echo "path=ffmpeg-kit/$aar" >> "$GITHUB_OUTPUT"
+          ls -lh "$aar"
+          echo "Native libraries in the archive:"
+          unzip -l "$aar" | grep '\.so$' || echo "::warning::no .so entries found"
+
+      - name: Rename for the composeApp/libs glob
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "${{ steps.locate.outputs.path }}" \
+             "dist/lib-ffmpeg-kit-${{ inputs.ffmpeg_kit_ref }}.aar"
+          ls -lh dist
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: lib-ffmpeg-kit-${{ inputs.ffmpeg_kit_ref }}
+          path: dist/*.aar
+          retention-days: 90
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-kit-build-log
+          path: ffmpeg-kit/build.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "## FFmpegKit AAR built"
+            echo ""
+            echo "LGPL build with MediaCodec hardware encode/decode. No GPL components, so it"
+            echo "can ship in a closed-source app via dynamic linking."
+            echo ""
+            echo "### To use it"
+            echo '1. Download the artifact and unzip it.'
+            echo '2. Put `lib-ffmpeg-kit-*.aar` in `composeApp/libs/`.'
+            echo '3. Build with `-Pnuvio.android.ffmpeg=true`.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -295,6 +295,24 @@ val androidDistributionSourceDir = if (androidDistribution == "full") {
 } else {
     "src/androidPlaystore/kotlin"
 }
+
+// Bundling FFmpeg is opt-in because it requires an AAR that is not in the repository:
+// FFmpegKit was retired and its Maven artifacts withdrawn, so the binary is produced by the
+// build-ffmpeg-kit workflow and dropped into composeApp/libs. Without it the cast pipeline
+// falls back to Media3 Transformer, which handles the common cases but cannot decode formats
+// the handset's own MediaCodec rejects.
+val bundleFfmpeg = (
+    providers.gradleProperty("nuvio.android.ffmpeg").orNull
+        ?: System.getenv("NUVIO_ANDROID_FFMPEG")
+        ?: "false"
+    ).trim().equals("true", ignoreCase = true)
+val ffmpegSourceDir = if (bundleFfmpeg) "src/androidFfmpeg/kotlin" else "src/androidNoFfmpeg/kotlin"
+val ffmpegKitAar = project.file("libs").listFiles()
+    ?.firstOrNull { it.name.startsWith("lib-ffmpeg-kit") && it.extension == "aar" }
+require(!bundleFfmpeg || ffmpegKitAar != null) {
+    "nuvio.android.ffmpeg=true but no lib-ffmpeg-kit-*.aar found in composeApp/libs. " +
+        "Run the \"Build FFmpegKit AAR\" workflow and copy its artifact there."
+}
 val runtimeLocalProperties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) {
@@ -455,6 +473,8 @@ kotlin {
         }
         androidMain {
             kotlin.srcDir(project.file(androidDistributionSourceDir))
+            // Either the real FFmpeg processor or the no-op that falls back to Media3.
+            kotlin.srcDir(project.file(ffmpegSourceDir))
             if (androidDistribution == "full") {
                 kotlin.srcDir(fullCommonSourceDir)
             }

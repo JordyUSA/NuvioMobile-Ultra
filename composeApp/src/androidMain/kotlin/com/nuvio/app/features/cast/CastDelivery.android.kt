@@ -83,11 +83,17 @@ actual object CastDelivery {
         } else {
             _status.value = CastDeliveryStatus.Preparing(plan.mode, -1, plan.reasons)
 
-            val engine = processor ?: Media3CastMediaProcessor(context).also { processor = it }
+            val engine = processor ?: castMediaProcessor(context).also { processor = it }
             val output = File(context.cacheDir, "cast/${newId()}.mp4")
             workingFile = output
 
-            val produced = engine.process(request.url, plan, output) { progress ->
+            val produced = engine.process(
+                sourceUrl = request.url,
+                plan = plan,
+                output = output,
+                durationMs = probe?.durationMs,
+                headers = request.headers,
+            ) { progress ->
                 _status.value = CastDeliveryStatus.Preparing(plan.mode, progress, plan.reasons)
             }.getOrElse { error ->
                 Log.w(TAG, "${plan.mode} failed", error)
