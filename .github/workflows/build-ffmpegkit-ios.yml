@@ -1,17 +1,26 @@
-name: Build FFmpegKit iOS xcframeworks
+name: Build FFmpegKit iOS frameworks
 
 # Mirrors build-ffmpeg-kit.yml (the Android AAR build), for the same reason: FFmpegKit was
 # retired in January 2025 and its prebuilt binaries pulled, but the source and build scripts
-# still work. This job compiles the iOS xcframeworks ourselves.
+# still work. This job compiles the iOS frameworks ourselves.
+#
+# ios.sh (v6.0) does not produce xcframeworks — that turned out to be a wrong assumption from
+# the first version of this workflow. It bundles each library as a plain, universal
+# (multi-architecture) .framework under prebuilt/bundle-apple-framework-ios/, one fat Mach-O
+# binary per library holding every architecture that was built. That is the pre-xcframework
+# format, but it still links into Xcode exactly like GoogleCast.framework would if GoogleCast
+# were not already an xcframework, and it sidesteps xcframeworks' only reason to exist here —
+# disambiguating an arm64 device slice from an arm64 simulator slice — since this build targets
+# arm64 device plus x86-64 simulator, which a fat binary can hold without conflict.
 #
 # Unlike the Android build, this one is deliberately GPL: it enables libx264 so CastTranscoder
 # has a software H.264 fallback for when VideoToolbox hardware encoding is unavailable or
 # refuses a particular stream. That is a real license consequence, not a formality — anything
-# this xcframework is statically linked into must be distributed under terms compatible with
-# the GPL. That is acceptable here because this project ships as a sideloaded IPA, not through
-# the App Store.
+# these frameworks are linked into must be distributed under terms compatible with the GPL.
+# That is acceptable here because this project ships as a sideloaded IPA, not through the App
+# Store.
 #
-# Download the artifact, unzip it, and drop the *.xcframework directories into
+# Download the artifact, unzip it, and drop the *.framework directories into
 # iosApp/Frameworks/FFmpegKit/. A human (or a follow-up commit) still has to wire them into
 # iosApp.xcodeproj's Frameworks build phase, the same way GoogleCast.xcframework was linked.
 
@@ -26,7 +35,7 @@ on:
         required: true
         default: 'v6.0'
       include_simulator:
-        description: 'Also build simulator slices (arm64 + x86_64), for local Simulator development'
+        description: 'Also build the x86-64 simulator slice, for local Simulator development'
         type: boolean
         required: false
         default: true
@@ -38,8 +47,10 @@ concurrency:
 jobs:
   build:
     runs-on: macos-latest
-    # A full multi-slice FFmpeg build on a macOS runner routinely runs 3-5 hours; give it
-    # headroom short of the 6-hour hosted-runner ceiling so a hang is caught before that.
+    # A full multi-slice FFmpeg build on a macOS runner can run for hours in the worst case;
+    # give it headroom short of the 6-hour hosted-runner ceiling so a hang is caught before
+    # that. In practice, this minimal component set (x264, openssl, ffmpeg, ffmpeg-kit) across
+    # two architectures takes under 15 minutes.
     timeout-minutes: 340
 
     env:
@@ -96,7 +107,7 @@ jobs:
           # Every non-device slice ios.sh knows how to build costs a full second (or third)
           # pass through every one of FFmpeg's component libraries. armv7/armv7s/i386/arm64e
           # cover hardware or Xcode toolchains this project does not target, so they are
-          # dropped unconditionally; the simulator slices are kept only for local development
+          # dropped unconditionally; the simulator slice is kept only for local development
           # convenience and can be turned off for a faster iteration build.
           args=(
             "--disable-armv7"
@@ -117,7 +128,7 @@ jobs:
           )
 
           if [ "${INCLUDE_SIMULATOR}" != "true" ]; then
-            args+=("--disable-arm64-simulator" "--disable-x86-64")
+            args+=("--disable-x86-64")
           fi
 
           echo "Building with: ${args[*]}"
@@ -131,7 +142,7 @@ jobs:
             exit 1
           fi
 
-      - name: Locate the xcframeworks
+      - name: Locate the frameworks
         id: locate
         working-directory: ffmpeg-kit
         run: |
@@ -142,46 +153,73 @@ jobs:
           find prebuilt -maxdepth 4 2>/dev/null || echo "(no prebuilt/ directory)"
           echo "::endgroup::"
 
-          # The exact output directory (and whether it is a real directory or a symlink into
-          # a build cache) has moved between ffmpeg-kit releases, so search the whole checkout
-          # rather than hard-coding a path that silently stops matching on a ref bump. -L
-          # follows symlinks: a script that assembles the bundle by linking rather than
-          # copying should not make it look like nothing was produced.
+          # ios.sh's final step lipo's every built architecture into one universal .framework
+          # per library under this directory. Prefer it explicitly over a blind repo-wide
+          # search: prebuilt/apple-ios-<arch>/ffmpeg/framework/*.framework also matches
+          # "*.framework" but holds only a single architecture each, which would silently ship
+          # a device-only or simulator-only binary depending on search order.
+          bundle_dir="$(find . -type d -iname 'bundle-apple-framework-ios' -print -quit)"
+
           found=0
-          while IFS= read -r -d '' framework; do
-            cp -RL "$framework" ../dist/
-            echo "Found: $framework"
-            found=$((found + 1))
-          done < <(find -L . -iname '*.xcframework' \( -type d -o -type l \) -print0)
+          if [ -n "$bundle_dir" ]; then
+            while IFS= read -r -d '' framework; do
+              cp -RL "$framework" ../dist/
+              echo "Found: $framework"
+              found=$((found + 1))
+            done < <(find "$bundle_dir" -mindepth 1 -maxdepth 1 -iname '*.framework' \( -type d -o -type l \) -print0)
+          fi
 
           if [ "$found" -eq 0 ]; then
-            echo "::group::Searching for plain .framework bundles instead"
-            find -L . -iname '*.framework' -maxdepth 6 \( -type d -o -type l \) 2>/dev/null
+            # A ref where the bundle directory is named or laid out differently: fall back to
+            # a repo-wide search (xcframework first, since that is the modern format; plain
+            # framework second) rather than failing outright.
+            echo "::group::bundle-apple-framework-ios not found or empty; searching the whole checkout"
+            find -L . -iname '*.framework' -o -iname '*.xcframework' 2>/dev/null
             echo "::endgroup::"
-            echo "::error::ios.sh finished but produced no .xcframework directories; see the layout above"
+            while IFS= read -r -d '' framework; do
+              cp -RL "$framework" ../dist/
+              echo "Found (fallback): $framework"
+              found=$((found + 1))
+            done < <(find -L . \( -iname '*.xcframework' -o -iname '*.framework' \) \( -type d -o -type l \) -print0)
+          fi
+
+          if [ "$found" -eq 0 ]; then
+            echo "::error::ios.sh finished but produced no .framework or .xcframework directories; see the layout above"
             exit 1
           fi
           echo "count=$found" >> "$GITHUB_OUTPUT"
 
-      - name: Verify the xcframeworks actually contain binaries
+      - name: Verify the frameworks actually contain binaries
         # The whole reason build-ffmpeg-kit.yml exists for Android is that a substitute build
         # can silently produce an archive with no native code in it. Check the same thing here:
-        # every device slice should carry a Mach-O binary with real size, not a stub.
+        # every bundle should carry a non-empty Mach-O binary, not a stub, and it should
+        # actually contain the arm64 slice a device build needs.
         run: |
           set -euo pipefail
           shopt -s nullglob
-          empty=0
-          for xcframework in dist/*.xcframework; do
-            name="$(basename "$xcframework" .xcframework)"
-            binary="$(find "$xcframework/ios-arm64" -maxdepth 2 -name "$name" -type f -print -quit 2>/dev/null || true)"
+          problems=0
+          for bundle in dist/*.framework dist/*.xcframework; do
+            [ -e "$bundle" ] || continue
+            name="$(basename "$bundle")"
+            name="${name%.framework}"
+            name="${name%.xcframework}"
+            binary="$(find "$bundle" -name "$name" -type f -print -quit 2>/dev/null || true)"
             if [ -z "$binary" ] || [ ! -s "$binary" ]; then
-              echo "::error::$xcframework has no non-empty ios-arm64 binary"
-              empty=$((empty + 1))
-            else
-              echo "$xcframework: $(du -h "$binary" | cut -f1)"
+              echo "::error::$bundle has no non-empty binary named $name"
+              problems=$((problems + 1))
+              continue
             fi
+            archs="$(lipo -archs "$binary" 2>/dev/null || echo unknown)"
+            echo "$bundle: $(du -h "$binary" | cut -f1), architectures: $archs"
+            case " $archs " in
+              *" arm64 "*) ;;
+              *)
+                echo "::error::$bundle's binary has no arm64 slice (architectures: $archs)"
+                problems=$((problems + 1))
+                ;;
+            esac
           done
-          if [ "$empty" -gt 0 ]; then
+          if [ "$problems" -gt 0 ]; then
             exit 1
           fi
 
@@ -189,7 +227,9 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          zip -qry "../ffmpegkit-ios-${FFMPEG_KIT_REF}-min-gpl.zip" ./*.xcframework
+          shopt -s nullglob
+          bundles=(*.framework *.xcframework)
+          zip -qry "../ffmpegkit-ios-${FFMPEG_KIT_REF}-min-gpl.zip" "${bundles[@]}"
           cd ..
           ls -lh "ffmpegkit-ios-${FFMPEG_KIT_REF}-min-gpl.zip"
 
@@ -213,12 +253,12 @@ jobs:
         if: success()
         run: |
           {
-            echo "## FFmpegKit iOS xcframeworks built"
+            echo "## FFmpegKit iOS frameworks built"
             echo ""
             echo "GPL build: libx264 enabled for a software H.264 fallback. VideoToolbox and"
             echo "OpenSSL are enabled; no other GPL/paid-codec components are included."
             echo ""
             echo '1. Download the artifact and unzip it.'
-            echo '2. Put every `*.xcframework` directory in `iosApp/Frameworks/FFmpegKit/`.'
+            echo '2. Put every `*.framework` directory in `iosApp/Frameworks/FFmpegKit/`.'
             echo '3. Wire each one into the Frameworks build phase of iosApp.xcodeproj.'
           } >> "$GITHUB_STEP_SUMMARY"
