@@ -12,7 +12,6 @@ import platform.AVFoundation.AVAssetTrack
 import platform.AVFoundation.AVMediaTypeAudio
 import platform.AVFoundation.AVMediaTypeVideo
 import platform.AVFoundation.AVURLAsset
-import platform.AVFoundation.AVURLAssetHTTPHeaderFieldsKey
 import platform.CoreMedia.CMFormatDescriptionGetMediaSubType
 import platform.CoreMedia.CMTimeGetSeconds
 import platform.Foundation.NSURL
@@ -57,7 +56,9 @@ actual suspend fun probeCastMedia(
 
     val nsUrl = NSURL.URLWithString(url) ?: return Result.failure(IllegalArgumentException("Bad URL: $url"))
     val options: Map<Any?, Any?>? = if (headers.isNotEmpty()) {
-        mapOf(AVURLAssetHTTPHeaderFieldsKey to headers)
+        // The named platform constant for this key is not exposed by Kotlin/Native's
+        // AVFoundation bindings; the literal is AVFoundation's own documented value for it.
+        mapOf("AVURLAssetHTTPHeaderFieldsKey" to headers)
     } else {
         null
     }

@@ -213,6 +213,7 @@ actual object CastDelivery {
         )
     }
 
+    @OptIn(ExperimentalForeignApi::class)
     private fun releasePrevious() {
         publishedId?.let { localServerBridge?.unpublish(it) }
         publishedId = null
