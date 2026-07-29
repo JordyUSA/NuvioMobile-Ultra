@@ -10,6 +10,22 @@
 		0A1B2C3D4E5F60718293A4BD /* DownloadsWidgetExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 0A1B2C3D4E5F60718293A4B5 /* DownloadsWidgetExtension.appex */; };
 		7397CF462F80FE3A00AC0F84 /* MPVKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6A7B8C9D0E1F2 /* MPVKit */; };
 		CA57F00DCAF00D0000000002 /* GoogleCast.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA57F00DCAF00D0000000001 /* GoogleCast.xcframework */; };
+		E845517D6C90C44124AE51F9 /* ffmpegkit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5CAB792204D9C66D75305FC4 /* ffmpegkit.framework */; };
+		545C2CF0E3F77F25EA449834 /* ffmpegkit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 5CAB792204D9C66D75305FC4 /* ffmpegkit.framework */; settings = { ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		D441EB938B5D0CA536BFE9C2 /* libavcodec.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4379CA3211B23CAD9BC814D4 /* libavcodec.framework */; };
+		9EC9F23AE90104C4E79F6BFE /* libavcodec.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4379CA3211B23CAD9BC814D4 /* libavcodec.framework */; settings = { ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		06BEDDA0A190087878F8F0CA /* libavdevice.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1FA3783E646CFDFA8B3558AD /* libavdevice.framework */; };
+		BC8DBBBC50C39DB9A4571210 /* libavdevice.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 1FA3783E646CFDFA8B3558AD /* libavdevice.framework */; settings = { ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		D18CB3F0D1E4CB3063A2BD68 /* libavfilter.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C41F2F9A829AAF21E5505ECE /* libavfilter.framework */; };
+		D91B0F4E54F2D3AE04BE3860 /* libavfilter.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C41F2F9A829AAF21E5505ECE /* libavfilter.framework */; settings = { ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		043357B2FB08CCDE435DD9C9 /* libavformat.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7AB38503BD4639E1759B6E72 /* libavformat.framework */; };
+		1EDC56753357EEFCF407DD17 /* libavformat.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 7AB38503BD4639E1759B6E72 /* libavformat.framework */; settings = { ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F5CC2EE6C80A53B91C6C5B27 /* libavutil.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 54C16015A078AADBD81EBADE /* libavutil.framework */; };
+		857434124D998E33DE6E080D /* libavutil.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 54C16015A078AADBD81EBADE /* libavutil.framework */; settings = { ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		21C7F5ECD9F36DE9691D37C9 /* libswresample.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F3E9CFAFB7DC0DC3B07CA150 /* libswresample.framework */; };
+		BA071B4E72D87B3E2C5BDF57 /* libswresample.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = F3E9CFAFB7DC0DC3B07CA150 /* libswresample.framework */; settings = { ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		8FB34BFDF3A90B12D277882C /* libswscale.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 88E562FEE97FC5B709D8C5A1 /* libswscale.framework */; };
+		52C04363EB736A9EDB1CAB83 /* libswscale.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 88E562FEE97FC5B709D8C5A1 /* libswscale.framework */; settings = { ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -34,12 +50,38 @@
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		6B854AE6A40E870E06D292B5 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				545C2CF0E3F77F25EA449834 /* ffmpegkit.framework in Embed Frameworks */,
+				9EC9F23AE90104C4E79F6BFE /* libavcodec.framework in Embed Frameworks */,
+				BC8DBBBC50C39DB9A4571210 /* libavdevice.framework in Embed Frameworks */,
+				D91B0F4E54F2D3AE04BE3860 /* libavfilter.framework in Embed Frameworks */,
+				1EDC56753357EEFCF407DD17 /* libavformat.framework in Embed Frameworks */,
+				857434124D998E33DE6E080D /* libavutil.framework in Embed Frameworks */,
+				BA071B4E72D87B3E2C5BDF57 /* libswresample.framework in Embed Frameworks */,
+				52C04363EB736A9EDB1CAB83 /* libswscale.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		07921B4E8F8546BEE682C2FE /* Nuvio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nuvio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A1B2C3D4E5F60718293A4B5 /* DownloadsWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = DownloadsWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA57F00DCAF00D0000000001 /* GoogleCast.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GoogleCast.xcframework; path = Frameworks/GoogleCast.xcframework; sourceTree = SOURCE_ROOT; };
+		5CAB792204D9C66D75305FC4 /* ffmpegkit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = ffmpegkit.framework; sourceTree = "<group>"; };
+		4379CA3211B23CAD9BC814D4 /* libavcodec.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libavcodec.framework; sourceTree = "<group>"; };
+		1FA3783E646CFDFA8B3558AD /* libavdevice.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libavdevice.framework; sourceTree = "<group>"; };
+		C41F2F9A829AAF21E5505ECE /* libavfilter.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libavfilter.framework; sourceTree = "<group>"; };
+		7AB38503BD4639E1759B6E72 /* libavformat.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libavformat.framework; sourceTree = "<group>"; };
+		54C16015A078AADBD81EBADE /* libavutil.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libavutil.framework; sourceTree = "<group>"; };
+		F3E9CFAFB7DC0DC3B07CA150 /* libswresample.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libswresample.framework; sourceTree = "<group>"; };
+		88E562FEE97FC5B709D8C5A1 /* libswscale.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libswscale.framework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -97,6 +139,14 @@
 			files = (
 				7397CF462F80FE3A00AC0F84 /* MPVKit in Frameworks */,
 				CA57F00DCAF00D0000000002 /* GoogleCast.xcframework in Frameworks */,
+				E845517D6C90C44124AE51F9 /* ffmpegkit.framework in Frameworks */,
+				D441EB938B5D0CA536BFE9C2 /* libavcodec.framework in Frameworks */,
+				06BEDDA0A190087878F8F0CA /* libavdevice.framework in Frameworks */,
+				D18CB3F0D1E4CB3063A2BD68 /* libavfilter.framework in Frameworks */,
+				043357B2FB08CCDE435DD9C9 /* libavformat.framework in Frameworks */,
+				F5CC2EE6C80A53B91C6C5B27 /* libavutil.framework in Frameworks */,
+				21C7F5ECD9F36DE9691D37C9 /* libswresample.framework in Frameworks */,
+				8FB34BFDF3A90B12D277882C /* libswscale.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -107,12 +157,29 @@
 			isa = PBXGroup;
 			children = (
 				CA57F00DCAF00D0000000001 /* GoogleCast.xcframework */,
+				5FF9CF382BEB6338A2E55CB9 /* FFmpegKit */,
 				69649F6DF5D3AF53A24CA9C3 /* Configuration */,
 				A2F97F59D21EB4D4B662C8D1 /* iosApp */,
 				0A1B2C3D4E5F60718293A4B6 /* DownloadsWidgetExtension */,
 				AD93033A33973C81BB77B73A /* Products */,
 			);
 			sourceTree = "<group>";
+		};
+		5FF9CF382BEB6338A2E55CB9 /* FFmpegKit */ = {
+			isa = PBXGroup;
+			children = (
+				5CAB792204D9C66D75305FC4 /* ffmpegkit.framework */,
+				4379CA3211B23CAD9BC814D4 /* libavcodec.framework */,
+				1FA3783E646CFDFA8B3558AD /* libavdevice.framework */,
+				C41F2F9A829AAF21E5505ECE /* libavfilter.framework */,
+				7AB38503BD4639E1759B6E72 /* libavformat.framework */,
+				54C16015A078AADBD81EBADE /* libavutil.framework */,
+				F3E9CFAFB7DC0DC3B07CA150 /* libswresample.framework */,
+				88E562FEE97FC5B709D8C5A1 /* libswscale.framework */,
+			);
+			name = FFmpegKit;
+			path = Frameworks/FFmpegKit;
+			sourceTree = SOURCE_ROOT;
 		};
 		AD93033A33973C81BB77B73A /* Products */ = {
 			isa = PBXGroup;
@@ -155,6 +222,7 @@
 				8C96BAEBBE1F4269A0BADC2B /* Compile Kotlin Framework */,
 				79E42700D221AF24510E3E09 /* Sources */,
 				B8D8368DBB6E1F38F403E5AA /* Frameworks */,
+				6B854AE6A40E870E06D292B5 /* Embed Frameworks */,
 				0A1B2C3D4E5F60718293A4BC /* Embed App Extensions */,
 				2DAFDB313E32F227766A2072 /* Resources */,
 				4D8F7A1B9C2E43F0A6B5D812 /* Copy Compose Resources */,
@@ -434,6 +502,7 @@
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Frameworks",
+					"$(SRCROOT)/Frameworks/FFmpegKit",
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
@@ -507,6 +576,7 @@
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Frameworks",
+					"$(SRCROOT)/Frameworks/FFmpegKit",
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",

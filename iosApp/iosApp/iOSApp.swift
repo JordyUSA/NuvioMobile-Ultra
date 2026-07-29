@@ -10,6 +10,11 @@ struct iOSApp: App {
     /// state reaching the shared code.
     private let castBridge = CastBridge.install()
 
+    /// Backs the local HTTP server and FFmpegKit transcoder `CastDelivery.ios.kt` drives for
+    /// the remux/transcode paths. Held for the same reason as `castBridge`: letting it
+    /// deallocate would tear down any in-flight local server or transcode.
+    private let castDeliveryBridge = CastDeliveryBridge.install()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
