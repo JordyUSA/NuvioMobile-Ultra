@@ -42,6 +42,9 @@ jobs:
       # push events carry no inputs, so fall back to sensible defaults.
       FFMPEG_KIT_REF: ${{ inputs.ffmpeg_kit_ref || 'v6.0' }}
       INCLUDE_ARMV7: ${{ inputs.include_armv7 == true }}
+      # Escape hatch honoured by CMake 4 for projects declaring an ancient minimum; ignored
+      # by 3.x, so it is safe alongside the pin below.
+      CMAKE_POLICY_VERSION_MINIMUM: '3.5'
 
     steps:
       - name: Reclaim disk space
@@ -59,9 +62,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake libtool pkg-config curl git doxygen nasm cmake \
+            autoconf automake libtool pkg-config curl git doxygen nasm \
             gcc gperf texinfo yasm bison autogen patch meson ninja-build \
             ragel groff gtk-doc-tools
+
+      - name: Pin CMake 3.x
+        # ubuntu-24 runners now ship CMake 4, which removed compatibility with the
+        # cmake_minimum_required values ffmpeg-kit v6.0 declares; its cpu-features build fails
+        # at configure time. Pinning an era-appropriate CMake fixes that class of breakage
+        # generally, rather than only the first occurrence of it.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --break-system-packages 'cmake==3.31.6'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify CMake
+        run: |
+          which cmake
+          cmake --version | head -1
 
       - name: Set up Java
         uses: actions/setup-java@v4
