@@ -21,12 +21,20 @@ import kotlin.coroutines.resume
  * Probes with `AVURLAsset`, which is the only demuxer available on iOS without adding a
  * dependency.
  *
- * That is also this probe's real limitation: AVFoundation only understands the QuickTime/MP4
- * family (plus HLS, handled separately below). It cannot open Matroska or AVI at all, so on
- * those a probe here fails and the caller falls back to reasoning from the container alone,
- * exactly as the shared documentation on [probeCastMedia] describes. That still covers the
- * common re-encode cases this exists for — HEVC or VP9 in an MP4 hitting a receiver that only
- * decodes H.264, or a resolution/bitrate above the receiver's ceiling.
+ * Every value read here goes through the completion-handler loaders (`load<Property>With-
+ * CompletionHandler:`) rather than the classic synchronous properties `AVAsynchronousKey-
+ * ValueLoading` used to provide. The synchronous accessors this file originally used —
+ * `tracks`, `mediaType`, `naturalSize`, `formatDescriptions`, `nominalFrameRate`,
+ * `estimatedDataRate`, `languageCode` — are not present in this project's Kotlin/Native
+ * AVFoundation bindings at all (confirmed by two rounds of `compileKotlinIosArm64` failures,
+ * not a guess); the completion-handler siblings Apple ships alongside the `async`/`await`
+ * versions for the same migration are.
+ *
+ * This still cannot open Matroska or AVI — AVFoundation never could — so on those a probe
+ * fails and the caller falls back to reasoning from the container alone, exactly as the shared
+ * documentation on [probeCastMedia] describes. That still covers the common re-encode cases
+ * this exists for: HEVC or VP9 in an MP4 hitting a receiver that only decodes H.264, or a
+ * resolution/bitrate above the receiver's ceiling.
  *
  * Dynamic range and bit depth are deliberately not read back: getting them from
  * `CMFormatDescription`'s extension dictionary means bridging its CFString keys, which is a lot
@@ -65,77 +73,130 @@ actual suspend fun probeCastMedia(
     val asset = AVURLAsset(uRL = nsUrl, options = options)
 
     return suspendCancellableCoroutine { continuation ->
-        asset.loadValuesAsynchronouslyForKeys(listOf("tracks", "duration")) {
-            val result = runCatching {
-                val tracks = asset.tracks.filterIsInstance<AVAssetTrack>()
-                if (tracks.isEmpty()) {
-                    throw IllegalStateException("AVFoundation could not open this source")
+        asset.loadTracksWithCompletionHandler { tracksResult, error ->
+            val tracks = tracksResult?.filterIsInstance<AVAssetTrack>().orEmpty()
+            if (tracks.isEmpty()) {
+                if (continuation.isActive) {
+                    continuation.resume(
+                        Result.failure(
+                            IllegalStateException(
+                                error?.localizedDescription ?: "AVFoundation could not open this source",
+                            ),
+                        ),
+                    )
                 }
+                return@loadTracksWithCompletionHandler
+            }
 
-                var video: CastVideoStream? = null
-                val audio = mutableListOf<CastAudioStream>()
+            describeTrack(tracks, index = 0, video = null, audio = mutableListOf()) { video, audio ->
+                asset.loadDurationWithCompletionHandler { duration, _ ->
+                    val durationSeconds = CMTimeGetSeconds(duration)
+                    val durationMs = durationSeconds
+                        .takeIf { it.isFinite() && it > 0 }
+                        ?.let { (it * 1000).toLong() }
 
-                for (track in tracks) {
-                    when (track.mediaType) {
-                        AVMediaTypeVideo -> if (video == null) video = videoStreamFrom(track)
-                        AVMediaTypeAudio -> audio += audioStreamFrom(track, isDefault = audio.isEmpty())
+                    if (continuation.isActive) {
+                        continuation.resume(
+                            Result.success(
+                                CastMediaProbe(
+                                    container = container,
+                                    video = video,
+                                    audioTracks = audio,
+                                    durationMs = durationMs,
+                                    isLive = durationMs == null,
+                                ),
+                            ),
+                        )
                     }
                 }
-
-                val durationSeconds = CMTimeGetSeconds(asset.duration)
-                val durationMs = durationSeconds
-                    .takeIf { it.isFinite() && it > 0 }
-                    ?.let { (it * 1000).toLong() }
-
-                CastMediaProbe(
-                    container = container,
-                    video = video,
-                    audioTracks = audio,
-                    durationMs = durationMs,
-                    isLive = durationMs == null,
-                )
             }
-            if (continuation.isActive) continuation.resume(result)
+        }
+    }
+}
+
+/** Walks [tracks] one at a time; each track's own properties load asynchronously in turn. */
+@OptIn(ExperimentalForeignApi::class)
+private fun describeTrack(
+    tracks: List<AVAssetTrack>,
+    index: Int,
+    video: CastVideoStream?,
+    audio: MutableList<CastAudioStream>,
+    onDone: (CastVideoStream?, List<CastAudioStream>) -> Unit,
+) {
+    if (index >= tracks.size) {
+        onDone(video, audio)
+        return
+    }
+    val track = tracks[index]
+    track.loadMediaTypeWithCompletionHandler { mediaType, _ ->
+        when (mediaType) {
+            // Only the first video track matters for delivery planning; a second angle or a
+            // thumbnail track would only complicate the codec decision without changing it.
+            AVMediaTypeVideo -> if (video != null) {
+                describeTrack(tracks, index + 1, video, audio, onDone)
+            } else {
+                loadVideoStream(track) { stream -> describeTrack(tracks, index + 1, stream, audio, onDone) }
+            }
+            AVMediaTypeAudio -> loadAudioStream(track, isDefault = audio.isEmpty()) { stream ->
+                audio += stream
+                describeTrack(tracks, index + 1, video, audio, onDone)
+            }
+            else -> describeTrack(tracks, index + 1, video, audio, onDone)
         }
     }
 }
 
 @OptIn(ExperimentalForeignApi::class)
-private fun videoStreamFrom(track: AVAssetTrack): CastVideoStream {
-    val size = track.naturalSize
-    val codec = track.formatDescriptions.firstOrNull()
-        ?.let { CMFormatDescriptionGetMediaSubType(it) }
-        ?.let(::videoCodecForFourCc)
-        ?: CastVideoCodec.UNKNOWN
-
-    return CastVideoStream(
-        codec = codec,
-        width = size.useContents { width }.toInt(),
-        height = size.useContents { height }.toInt(),
-        frameRate = track.nominalFrameRate.takeIf { it > 0f },
-        bitrateBitsPerSecond = track.estimatedDataRate.takeIf { it > 0f }?.toLong(),
-    )
+private fun loadVideoStream(track: AVAssetTrack, onDone: (CastVideoStream) -> Unit) {
+    track.loadNaturalSizeWithCompletionHandler { size, _ ->
+        track.loadFormatDescriptionsWithCompletionHandler { descriptions, _ ->
+            val codec = descriptions?.firstOrNull()
+                ?.let { CMFormatDescriptionGetMediaSubType(it) }
+                ?.let(::videoCodecForFourCc)
+                ?: CastVideoCodec.UNKNOWN
+            track.loadNominalFrameRateWithCompletionHandler { frameRate, _ ->
+                track.loadEstimatedDataRateWithCompletionHandler { dataRate, _ ->
+                    onDone(
+                        CastVideoStream(
+                            codec = codec,
+                            width = size.useContents { width }.toInt(),
+                            height = size.useContents { height }.toInt(),
+                            frameRate = frameRate.takeIf { it > 0f },
+                            bitrateBitsPerSecond = dataRate.takeIf { it > 0f }?.toLong(),
+                        ),
+                    )
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalForeignApi::class)
-private fun audioStreamFrom(track: AVAssetTrack, isDefault: Boolean): CastAudioStream {
-    val codec = track.formatDescriptions.firstOrNull()
-        ?.let { CMFormatDescriptionGetMediaSubType(it) }
-        ?.let(::audioCodecForFourCc)
-        ?: CastAudioCodec.UNKNOWN
-
-    return CastAudioStream(
-        codec = codec,
-        // AVAssetTrack has no direct channel-count accessor without decoding the audio format
-        // description's ASBD; stereo is the overwhelmingly common case and, unlike the video
-        // checks above, an undercount here only affects the AAC downmix target, not whether
-        // the stream plays at all.
-        channelCount = 2,
-        sampleRateHz = null,
-        bitrateBitsPerSecond = track.estimatedDataRate.takeIf { it > 0f }?.toLong(),
-        language = track.languageCode,
-        isDefault = isDefault,
-    )
+private fun loadAudioStream(track: AVAssetTrack, isDefault: Boolean, onDone: (CastAudioStream) -> Unit) {
+    track.loadFormatDescriptionsWithCompletionHandler { descriptions, _ ->
+        val codec = descriptions?.firstOrNull()
+            ?.let { CMFormatDescriptionGetMediaSubType(it) }
+            ?.let(::audioCodecForFourCc)
+            ?: CastAudioCodec.UNKNOWN
+        track.loadEstimatedDataRateWithCompletionHandler { dataRate, _ ->
+            track.loadLanguageCodeWithCompletionHandler { language, _ ->
+                onDone(
+                    CastAudioStream(
+                        codec = codec,
+                        // AVAssetTrack has no direct channel-count accessor without decoding the
+                        // audio format description's ASBD; stereo is the overwhelmingly common
+                        // case and, unlike the video checks above, an undercount here only
+                        // affects the AAC downmix target, not whether the stream plays at all.
+                        channelCount = 2,
+                        sampleRateHz = null,
+                        bitrateBitsPerSecond = dataRate.takeIf { it > 0f }?.toLong(),
+                        language = language,
+                        isDefault = isDefault,
+                    ),
+                )
+            }
+        }
+    }
 }
 
 private fun fourCc(code: String): UInt {
