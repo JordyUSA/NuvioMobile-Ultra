@@ -1,0 +1,213 @@
+name: Build FFmpegKit iOS xcframeworks
+
+# Mirrors build-ffmpeg-kit.yml (the Android AAR build), for the same reason: FFmpegKit was
+# retired in January 2025 and its prebuilt binaries pulled, but the source and build scripts
+# still work. This job compiles the iOS xcframeworks ourselves.
+#
+# Unlike the Android build, this one is deliberately GPL: it enables libx264 so CastTranscoder
+# has a software H.264 fallback for when VideoToolbox hardware encoding is unavailable or
+# refuses a particular stream. That is a real license consequence, not a formality — anything
+# this xcframework is statically linked into must be distributed under terms compatible with
+# the GPL. That is acceptable here because this project ships as a sideloaded IPA, not through
+# the App Store.
+#
+# Download the artifact, unzip it, and drop the *.xcframework directories into
+# iosApp/Frameworks/FFmpegKit/. A human (or a follow-up commit) still has to wire them into
+# iosApp.xcodeproj's Frameworks build phase, the same way GoogleCast.xcframework was linked.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/build-ffmpegkit-ios.yml'
+  workflow_dispatch:
+    inputs:
+      ffmpeg_kit_ref:
+        description: 'ffmpeg-kit git ref to build'
+        required: true
+        default: 'v6.0'
+      include_simulator:
+        description: 'Also build simulator slices (arm64 + x86_64), for local Simulator development'
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  group: build-ffmpegkit-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    # A full multi-slice FFmpeg build on a macOS runner routinely runs 3-5 hours; give it
+    # headroom short of the 6-hour hosted-runner ceiling so a hang is caught before that.
+    timeout-minutes: 340
+
+    env:
+      FFMPEG_KIT_REF: ${{ inputs.ffmpeg_kit_ref || 'v6.0' }}
+      INCLUDE_SIMULATOR: ${{ inputs.include_simulator == true || github.event_name == 'push' }}
+
+    steps:
+      - name: Reclaim disk space
+        # macOS runners ship several Xcode versions and a full set of simulator runtimes,
+        # which between them account for most of the disk. None of that is needed to cross
+        # compile FFmpeg, and an unattended multi-architecture build that runs out of space
+        # fails hours in with a confusing linker error rather than a clear one up front.
+        run: |
+          echo "Before:"; df -h / | tail -1
+          sudo rm -rf /Users/runner/Library/Developer/CoreSimulator/Caches || true
+          sudo rm -rf /Applications/Xcode_15*.app /Applications/Xcode_14*.app || true
+          sudo rm -rf "$ANDROID_HOME" "$ANDROID_SDK_ROOT" || true
+          echo "After:"; df -h / | tail -1
+
+      - name: Install build tooling
+        run: |
+          set -euo pipefail
+          brew install autoconf automake libtool pkg-config nasm yasm gperf \
+            texinfo bison meson ninja
+
+      - name: Pin CMake 3.x
+        # The Android build hit ffmpeg-kit's cpu-features subproject failing to configure under
+        # CMake 4's stricter cmake_minimum_required enforcement. cpu-features is Android-only,
+        # but other bundled third-party CMake projects in ffmpeg-kit are old enough to have the
+        # same problem, so pin defensively here too rather than waiting to hit it.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --break-system-packages 'cmake==3.31.6'
+          echo "$HOME/Library/Python/$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')/bin" >> "$GITHUB_PATH"
+
+      - name: Verify CMake and Xcode
+        run: |
+          which cmake
+          cmake --version | head -1
+          xcodebuild -version
+
+      - name: Checkout ffmpeg-kit
+        uses: actions/checkout@v4
+        with:
+          repository: arthenica/ffmpeg-kit
+          ref: ${{ env.FFMPEG_KIT_REF }}
+          path: ffmpeg-kit
+
+      - name: Build
+        working-directory: ffmpeg-kit
+        run: |
+          set -euo pipefail
+
+          # Every non-device slice ios.sh knows how to build costs a full second (or third)
+          # pass through every one of FFmpeg's component libraries. armv7/armv7s/i386/arm64e
+          # cover hardware or Xcode toolchains this project does not target, so they are
+          # dropped unconditionally; the simulator slices are kept only for local development
+          # convenience and can be turned off for a faster iteration build.
+          args=(
+            "--disable-armv7"
+            "--disable-armv7s"
+            "--disable-arm64e"
+            "--disable-i386"
+            # Hardware decode/encode passthrough, so CastTranscoder can ask for
+            # h264_videotoolbox before ever falling back to the software encoder below.
+            "--enable-ios-videotoolbox"
+            # TLS, so https:// sources can be read directly without a manual cert bundle.
+            "--enable-openssl"
+            # The whole reason this workflow is GPL rather than mirroring the Android build:
+            # a software H.264 encoder for when VideoToolbox is busy or refuses the input.
+            # ffmpeg-kit requires --enable-gpl to be passed explicitly alongside any
+            # GPL-licensed component; it is not implied by --enable-x264 alone.
+            "--enable-gpl"
+            "--enable-x264"
+          )
+
+          if [ "${INCLUDE_SIMULATOR}" != "true" ]; then
+            args+=("--disable-arm64-simulator" "--disable-x86-64")
+          fi
+
+          echo "Building with: ${args[*]}"
+          # ios.sh prints only "<component>: failed" on the console and defers detail to
+          # build.log, so surface the tail of it in the job output rather than only as an
+          # artifact nobody looks at until the job is already marked green.
+          if ! ./ios.sh "${args[@]}"; then
+            echo "::group::build.log (last 400 lines)"
+            tail -n 400 build.log 2>/dev/null || echo "(no build.log)"
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      - name: Locate the xcframeworks
+        id: locate
+        working-directory: ffmpeg-kit
+        run: |
+          set -euo pipefail
+          mkdir -p ../dist
+          # The exact output directory has moved between ffmpeg-kit releases, so search for it
+          # rather than hard-coding a path that silently stops matching on a ref bump.
+          found=0
+          while IFS= read -r -d '' framework; do
+            cp -R "$framework" ../dist/
+            echo "Found: $framework"
+            found=$((found + 1))
+          done < <(find . -iname '*.xcframework' -type d -print0)
+
+          if [ "$found" -eq 0 ]; then
+            echo "::error::ios.sh finished but produced no .xcframework directories"
+            exit 1
+          fi
+          echo "count=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the xcframeworks actually contain binaries
+        # The whole reason build-ffmpeg-kit.yml exists for Android is that a substitute build
+        # can silently produce an archive with no native code in it. Check the same thing here:
+        # every device slice should carry a Mach-O binary with real size, not a stub.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          empty=0
+          for xcframework in dist/*.xcframework; do
+            name="$(basename "$xcframework" .xcframework)"
+            binary="$(find "$xcframework/ios-arm64" -maxdepth 2 -name "$name" -type f -print -quit 2>/dev/null || true)"
+            if [ -z "$binary" ] || [ ! -s "$binary" ]; then
+              echo "::error::$xcframework has no non-empty ios-arm64 binary"
+              empty=$((empty + 1))
+            else
+              echo "$xcframework: $(du -h "$binary" | cut -f1)"
+            fi
+          done
+          if [ "$empty" -gt 0 ]; then
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd dist
+          zip -qry "../ffmpegkit-ios-${FFMPEG_KIT_REF}-min-gpl.zip" ./*.xcframework
+          cd ..
+          ls -lh "ffmpegkit-ios-${FFMPEG_KIT_REF}-min-gpl.zip"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpegkit-ios-${{ env.FFMPEG_KIT_REF }}-min-gpl
+          path: ffmpegkit-ios-${{ env.FFMPEG_KIT_REF }}-min-gpl.zip
+          retention-days: 90
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpegkit-ios-build-log
+          path: ffmpeg-kit/build.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "## FFmpegKit iOS xcframeworks built"
+            echo ""
+            echo "GPL build: libx264 enabled for a software H.264 fallback. VideoToolbox and"
+            echo "OpenSSL are enabled; no other GPL/paid-codec components are included."
+            echo ""
+            echo '1. Download the artifact and unzip it.'
+            echo '2. Put every `*.xcframework` directory in `iosApp/Frameworks/FFmpegKit/`.'
+            echo '3. Wire each one into the Frameworks build phase of iosApp.xcodeproj.'
+          } >> "$GITHUB_STEP_SUMMARY"
