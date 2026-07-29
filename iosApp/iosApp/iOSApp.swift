@@ -5,6 +5,11 @@ import ComposeApp
 struct iOSApp: App {
     @UIApplicationDelegateAdaptor(OrientationLockAppDelegate.self) private var appDelegate
 
+    /// Held for the lifetime of the app: the bridge is the Cast SDK's session and discovery
+    /// listener, and those are weak references, so letting it deallocate would silently stop
+    /// state reaching the shared code.
+    private let castBridge = CastBridge.install()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
