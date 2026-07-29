@@ -33,8 +33,6 @@ final class CastTranscoder {
         case libx264 = "libx264"
     }
 
-    private var activeSessionId: Int?
-
     /// Produces a receiver-playable file at `outputPath`.
     ///
     /// `onProgress` reports 0...100 and is advisory; not every input carries a duration FFmpeg
@@ -90,11 +88,12 @@ final class CastTranscoder {
         }
     }
 
+    /// Cancels every FFmpegKit session rather than tracking this one's id. There is only ever
+    /// one transcode in flight at a time here, and the session id accessor turned out to be
+    /// unreliable to reference from Swift across otherwise-identical builds (see the note in
+    /// `run` below) — cancelling everything sidesteps needing it at all.
     func cancel() {
-        if let sessionId = activeSessionId {
-            FFmpegKit.cancel(sessionId)
-        }
-        activeSessionId = nil
+        FFmpegKit.cancel()
     }
 
     // MARK: - Private
@@ -127,8 +126,7 @@ final class CastTranscoder {
         // next, purely because unrelated syntax changed earlier in the same statement. Giving
         // each closure a concrete type up front turns the call itself into ordinary
         // already-typed-argument matching instead of a shared inference problem.
-        let completeCallback: FFmpegSessionCompleteCallback = { [weak self] (session: FFmpegSession?) in
-            self?.activeSessionId = nil
+        let completeCallback: FFmpegSessionCompleteCallback = { (session: FFmpegSession?) in
             guard let session else {
                 DispatchQueue.main.async { completion(.failure(Self.error("ffmpeg session was nil"))) }
                 return
@@ -154,13 +152,14 @@ final class CastTranscoder {
             DispatchQueue.main.async { onProgress(min(max(percent, 0), 100)) }
         }
 
-        let session: FFmpegSession? = FFmpegKit.execute(
+        // The return value (the created session) is intentionally not captured — see cancel()
+        // above for why nothing here needs its id.
+        FFmpegKit.execute(
             withArgumentsAsync: arguments,
             withCompleteCallback: completeCallback,
             withLogCallback: nil,
             withStatisticsCallback: statisticsCallback
         )
-        activeSessionId = session?.sessionId
     }
 
     private func buildArguments(
