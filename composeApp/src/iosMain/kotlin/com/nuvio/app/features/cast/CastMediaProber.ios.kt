@@ -178,8 +178,8 @@ private fun loadAudioStream(track: AVAssetTrack, isDefault: Boolean, onDone: (Ca
             ?.let { CMFormatDescriptionGetMediaSubType(it) }
             ?.let(::audioCodecForFourCc)
             ?: CastAudioCodec.UNKNOWN
-        track.loadEstimatedDataRateWithCompletionHandler { dataRate, _ ->
-            track.loadLanguageCodeWithCompletionHandler { language, _ ->
+        track.loadEstimatedDataRateWithCompletionHandler { dataRate: Float, _ ->
+            track.loadLanguageCodeWithCompletionHandler { language: String?, _ ->
                 onDone(
                     CastAudioStream(
                         codec = codec,
