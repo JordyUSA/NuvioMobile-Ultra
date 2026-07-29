@@ -61,12 +61,35 @@ jobs:
       - name: Create local.properties
         run: touch local.properties
 
+      # AGP will not download SDK components without accepted licences, and compileSdk 37 is
+      # new enough that a runner image may not carry it. Both are best-effort: if the platform
+      # is already present or not yet published, the build proceeds either way.
+      - name: Accept SDK licences
+        run: |
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          manager="$(find "$sdk_root/cmdline-tools" -name sdkmanager -type f -print -quit)"
+          if [ -n "$manager" ]; then
+            yes | "$manager" --licenses >/dev/null 2>&1 || true
+            "$manager" --install "platforms;android-37" >/dev/null 2>&1 || true
+          fi
+          ls "$sdk_root/platforms" 2>/dev/null || true
+
       - name: Assemble
         run: |
-          ./gradlew :composeApp:assembleDebug \
-            -Pnuvio.android.ffmpeg=${{ matrix.ffmpeg }} \
-            -Pnuvio.android.distribution=full \
-            --stacktrace
+          set -o pipefail
+          # No --stacktrace: it buries the actual message under eighty lines of Gradle
+          # internals. The failure block is extracted below instead, which is what is needed
+          # to act on a failure; the trace can be re-enabled once the message is known.
+          if ! ./gradlew :composeApp:assembleDebug \
+              -Pnuvio.android.ffmpeg=${{ matrix.ffmpeg }} \
+              -Pnuvio.android.distribution=full 2>&1 | tee gradle-output.log; then
+            echo "::group::Failure detail"
+            sed -n '/FAILURE: Build failed/,/^\* Get more help/p' gradle-output.log | head -60
+            echo "--- compiler errors, if any ---"
+            grep -E "^e: |error: |Unresolved reference|Caused by:" gradle-output.log | head -40
+            echo "::endgroup::"
+            exit 1
+          fi
         env:
           GRADLE_OPTS: -Xmx5g -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=1g
 

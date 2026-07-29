@@ -6,15 +6,23 @@ on:
       - feature/chromecast-hw-transcoding
     # None of these can change the iOS framework, so they must not start a three-hour
     # macOS build. Android sources are not on the iOS compile path at all.
-    paths-ignore:
-      - '.github/workflows/build-ffmpeg-kit.yml'
-      - '.github/workflows/build-android.yml'
-      - '**/*.md'
-      - 'composeApp/src/androidMain/**'
-      - 'composeApp/src/androidFull/**'
-      - 'composeApp/src/androidPlaystore/**'
-      - 'composeApp/src/androidFfmpeg/**'
-      - 'composeApp/src/androidNoFfmpeg/**'
+    # An allowlist, not a denylist. paths-ignore only skips a run when every changed file
+    # matches, so a commit touching one Android file alongside anything else still started a
+    # three-hour macOS build. These are the only inputs that can change the iOS framework.
+    paths:
+      - 'composeApp/src/commonMain/**'
+      - 'composeApp/src/fullCommonMain/**'
+      - 'composeApp/src/iosMain/**'
+      - 'composeApp/src/iosFull/**'
+      - 'composeApp/src/iosAppStore/**'
+      - 'composeApp/src/nativeInterop/**'
+      - 'composeApp/build.gradle.kts'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'iosApp/**'
+      - '.github/workflows/build-ipa.yml'
   workflow_dispatch:
 
 # Only the newest commit on a branch is worth building. Without this, a run is started for
