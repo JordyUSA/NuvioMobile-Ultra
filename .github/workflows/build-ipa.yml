@@ -8,6 +8,7 @@ on:
     # macOS build. Android sources are not on the iOS compile path at all.
     paths-ignore:
       - '.github/workflows/build-ffmpeg-kit.yml'
+      - '.github/workflows/build-android.yml'
       - '**/*.md'
       - 'composeApp/src/androidMain/**'
       - 'composeApp/src/androidFull/**'

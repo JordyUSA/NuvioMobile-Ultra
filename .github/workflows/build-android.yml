@@ -1,0 +1,100 @@
+name: Build Android
+
+# The Android half of the cast feature had no CI at all: the iOS workflow compiles commonMain
+# and iosMain but never touches androidMain, so the Cast SDK integration, local server, prober
+# and FFmpeg processor were shipping uncompiled. This job closes that gap, and on Linux it
+# costs a fraction of the three-hour macOS build.
+
+on:
+  push:
+    branches:
+      - feature/chromecast-hw-transcoding
+    paths-ignore:
+      - '**/*.md'
+      - '.github/workflows/build-ipa.yml'
+      - '.github/workflows/build-ffmpeg-kit.yml'
+      # iOS-only sources cannot affect the Android build.
+      - 'composeApp/src/iosMain/**'
+      - 'composeApp/src/iosFull/**'
+      - 'composeApp/src/iosAppStore/**'
+      - 'iosApp/**'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    strategy:
+      # Both configurations must keep compiling. Without the flag the app falls back to the
+      # src/androidNoFfmpeg stub and Media3 Transformer, which is the configuration anyone
+      # building this repo without the vendored AAR will get, so it cannot be allowed to rot.
+      fail-fast: false
+      matrix:
+        include:
+          - name: with FFmpeg
+            ffmpeg: 'true'
+          - name: without FFmpeg
+            ffmpeg: 'false'
+
+    name: assembleDebug (${{ matrix.name }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Fixes: Task :composeApp:generateRuntimeConfigs FAILED
+      - name: Create local.properties
+        run: touch local.properties
+
+      - name: Assemble
+        run: |
+          ./gradlew :composeApp:assembleDebug \
+            -Pnuvio.android.ffmpeg=${{ matrix.ffmpeg }} \
+            -Pnuvio.android.distribution=full \
+            --stacktrace
+        env:
+          GRADLE_OPTS: -Xmx5g -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=1g
+
+      # Confirms the vendored AAR was actually linked rather than silently ignored, which is
+      # the failure mode that would otherwise look identical to a working build.
+      - name: Verify FFmpeg made it into the APK
+        if: matrix.ffmpeg == 'true'
+        run: |
+          set -euo pipefail
+          apk="$(find composeApp/build/outputs/apk -name '*.apk' -print -quit)"
+          if [ -z "$apk" ]; then
+            echo "::error::no APK produced"
+            exit 1
+          fi
+          echo "Inspecting $apk"
+          count="$(unzip -l "$apk" | grep -c 'lib/arm64-v8a/libavcodec\.so' || true)"
+          if [ "$count" -lt 1 ]; then
+            echo "::error::libavcodec.so is absent from the APK; the AAR was not linked"
+            unzip -l "$apk" | grep '\.so$' | head -20
+            exit 1
+          fi
+          echo "libavcodec.so present"
+
+      - name: Upload APK
+        if: matrix.ffmpeg == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuvio-debug-apk
+          path: composeApp/build/outputs/apk/**/*.apk
+          retention-days: 14
+          if-no-files-found: warn
