@@ -127,23 +127,23 @@ final class CastTranscoder {
                     DispatchQueue.main.async { completion(.failure(Self.error("ffmpeg session was nil"))) }
                     return
                 }
-                if ReturnCode.isSuccess(session.returnCode) {
+                if ReturnCode.isSuccess(session.getReturnCode()) {
                     DispatchQueue.main.async { completion(.success(())) }
-                } else if ReturnCode.isCancel(session.returnCode) {
+                } else if ReturnCode.isCancel(session.getReturnCode()) {
                     DispatchQueue.main.async { completion(.failure(Self.error("Cast was cancelled"))) }
                 } else {
                     // The return code alone ("1") never explains anything; the tail of the
                     // session log is what does.
-                    let detail = session.failStackTrace
-                        ?? session.allLogsAsString?.suffix(2000).description
-                        ?? "ffmpeg exited with \(session.returnCode?.value ?? -1)"
+                    let detail = session.getFailStackTrace()
+                        ?? session.getAllLogsAsString()?.suffix(2000).description
+                        ?? "ffmpeg exited with \(session.getReturnCode()?.getValue() ?? -1)"
                     DispatchQueue.main.async { completion(.failure(Self.error(detail))) }
                 }
             },
             withLogCallback: nil,
             withStatisticsCallback: { statistics in
                 guard let statistics, durationMs > 0 else { return }
-                let done = Int64(statistics.time)
+                let done = Int64(statistics.getTime())
                 let percent = Int((done * 100) / durationMs)
                 DispatchQueue.main.async { onProgress(min(max(percent, 0), 100)) }
             }
