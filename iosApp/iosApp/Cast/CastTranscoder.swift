@@ -33,7 +33,7 @@ final class CastTranscoder {
         case libx264 = "libx264"
     }
 
-    private var activeSessionId: Int32?
+    private var activeSessionId: Int?
 
     /// Produces a receiver-playable file at `outputPath`.
     ///
