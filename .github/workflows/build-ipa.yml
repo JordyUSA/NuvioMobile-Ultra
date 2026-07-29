@@ -4,11 +4,31 @@ on:
   push:
     branches:
       - feature/chromecast-hw-transcoding
+    # None of these can change the iOS framework, so they must not start a three-hour
+    # macOS build. Android sources are not on the iOS compile path at all.
+    paths-ignore:
+      - '.github/workflows/build-ffmpeg-kit.yml'
+      - '**/*.md'
+      - 'composeApp/src/androidMain/**'
+      - 'composeApp/src/androidFull/**'
+      - 'composeApp/src/androidPlaystore/**'
+      - 'composeApp/src/androidFfmpeg/**'
+      - 'composeApp/src/androidNoFfmpeg/**'
   workflow_dispatch:
+
+# Only the newest commit on a branch is worth building. Without this, a run is started for
+# every push and they all continue in parallel, which on macOS runners bills at ten times the
+# Linux rate for results that are already obsolete.
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: macos-latest
+    # This build legitimately takes two to three hours, but without a ceiling a hang would
+    # burn the full six-hour maximum before GitHub intervenes.
+    timeout-minutes: 240
 
     env:
       # The "full" distribution links against nuvio-engine's NuvioEngine.xcframework, which
