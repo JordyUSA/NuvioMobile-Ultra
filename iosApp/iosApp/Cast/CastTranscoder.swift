@@ -119,34 +119,46 @@ final class CastTranscoder {
             audioTarget: audioTarget
         )
 
-        let session = FFmpegKit.execute(
-            withArgumentsAsync: arguments,
-            withCompleteCallback: { [weak self] session in
-                self?.activeSessionId = nil
-                guard let session else {
-                    DispatchQueue.main.async { completion(.failure(Self.error("ffmpeg session was nil"))) }
-                    return
-                }
-                if ReturnCode.isSuccess(session.getReturnCode()) {
-                    DispatchQueue.main.async { completion(.success(())) }
-                } else if ReturnCode.isCancel(session.getReturnCode()) {
-                    DispatchQueue.main.async { completion(.failure(Self.error("Cast was cancelled"))) }
-                } else {
-                    // The return code alone ("1") never explains anything; the tail of the
-                    // session log is what does.
-                    let detail = session.getFailStackTrace()
-                        ?? session.getAllLogsAsString()?.suffix(2000).description
-                        ?? "ffmpeg exited with \(session.getReturnCode()?.getValue() ?? -1)"
-                    DispatchQueue.main.async { completion(.failure(Self.error(detail))) }
-                }
-            },
-            withLogCallback: nil,
-            withStatisticsCallback: { statistics in
-                guard let statistics, durationMs > 0 else { return }
-                let done = Int64(statistics.getTime())
-                let percent = Int((done * 100) / durationMs)
-                DispatchQueue.main.async { onProgress(min(max(percent, 0), 100)) }
+        // Pre-typed as their own `let` bindings, with the exact typealiases FFmpegKit.h
+        // declares, rather than passed as inline trailing closures. Swift's type checker has
+        // to solve this whole four-labeled-argument call and every closure body together when
+        // they are inline, and that joint inference proved unstable across otherwise-identical
+        // archive runs — the same untouched line resolved on one run and failed to on the
+        // next, purely because unrelated syntax changed earlier in the same statement. Giving
+        // each closure a concrete type up front turns the call itself into ordinary
+        // already-typed-argument matching instead of a shared inference problem.
+        let completeCallback: FFmpegSessionCompleteCallback = { [weak self] (session: FFmpegSession?) in
+            self?.activeSessionId = nil
+            guard let session else {
+                DispatchQueue.main.async { completion(.failure(Self.error("ffmpeg session was nil"))) }
+                return
             }
+            if ReturnCode.isSuccess(session.getReturnCode()) {
+                DispatchQueue.main.async { completion(.success(())) }
+            } else if ReturnCode.isCancel(session.getReturnCode()) {
+                DispatchQueue.main.async { completion(.failure(Self.error("Cast was cancelled"))) }
+            } else {
+                // The return code alone ("1") never explains anything; the tail of the
+                // session log is what does.
+                let detail = session.getFailStackTrace()
+                    ?? session.getAllLogsAsString()?.suffix(2000).description
+                    ?? "ffmpeg exited with \(session.getReturnCode()?.getValue() ?? -1)"
+                DispatchQueue.main.async { completion(.failure(Self.error(detail))) }
+            }
+        }
+
+        let statisticsCallback: StatisticsCallback = { (statistics: Statistics?) in
+            guard let statistics, durationMs > 0 else { return }
+            let done = Int64(statistics.getTime())
+            let percent = Int((done * 100) / durationMs)
+            DispatchQueue.main.async { onProgress(min(max(percent, 0), 100)) }
+        }
+
+        let session: FFmpegSession? = FFmpegKit.execute(
+            withArgumentsAsync: arguments,
+            withCompleteCallback: completeCallback,
+            withLogCallback: nil,
+            withStatisticsCallback: statisticsCallback
         )
         activeSessionId = session?.sessionId
     }
