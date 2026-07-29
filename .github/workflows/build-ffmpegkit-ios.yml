@@ -137,17 +137,28 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ../dist
-          # The exact output directory has moved between ffmpeg-kit releases, so search for it
-          # rather than hard-coding a path that silently stops matching on a ref bump.
+
+          echo "::group::prebuilt/ layout"
+          find prebuilt -maxdepth 4 2>/dev/null || echo "(no prebuilt/ directory)"
+          echo "::endgroup::"
+
+          # The exact output directory (and whether it is a real directory or a symlink into
+          # a build cache) has moved between ffmpeg-kit releases, so search the whole checkout
+          # rather than hard-coding a path that silently stops matching on a ref bump. -L
+          # follows symlinks: a script that assembles the bundle by linking rather than
+          # copying should not make it look like nothing was produced.
           found=0
           while IFS= read -r -d '' framework; do
-            cp -R "$framework" ../dist/
+            cp -RL "$framework" ../dist/
             echo "Found: $framework"
             found=$((found + 1))
-          done < <(find . -iname '*.xcframework' -type d -print0)
+          done < <(find -L . -iname '*.xcframework' \( -type d -o -type l \) -print0)
 
           if [ "$found" -eq 0 ]; then
-            echo "::error::ios.sh finished but produced no .xcframework directories"
+            echo "::group::Searching for plain .framework bundles instead"
+            find -L . -iname '*.framework' -maxdepth 6 \( -type d -o -type l \) 2>/dev/null
+            echo "::endgroup::"
+            echo "::error::ios.sh finished but produced no .xcframework directories; see the layout above"
             exit 1
           fi
           echo "count=$found" >> "$GITHUB_OUTPUT"
