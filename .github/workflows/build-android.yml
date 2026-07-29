@@ -42,7 +42,7 @@ jobs:
           - name: without FFmpeg
             ffmpeg: 'false'
 
-    name: assembleDebug (${{ matrix.name }})
+    name: assembleFullDebug (${{ matrix.name }})
 
     steps:
       - name: Checkout
@@ -80,9 +80,11 @@ jobs:
           # No --stacktrace: it buries the actual message under eighty lines of Gradle
           # internals. The failure block is extracted below instead, which is what is needed
           # to act on a failure; the trace can be re-enabled once the message is known.
-          if ! ./gradlew :composeApp:assembleDebug \
-              -Pnuvio.android.ffmpeg=${{ matrix.ffmpeg }} \
-              -Pnuvio.android.distribution=full 2>&1 | tee gradle-output.log; then
+          # :composeApp is a library under the new KMP Android plugin and has no application
+          # variants; the APK comes from :androidApp, which carries the full/playstore flavour
+          # dimension. This mirrors android-release.yml, which builds assembleFullRelease.
+          if ! ./gradlew :androidApp:assembleFullDebug \
+              -Pnuvio.android.ffmpeg=${{ matrix.ffmpeg }} 2>&1 | tee gradle-output.log; then
             echo "::group::Failure detail"
             sed -n '/FAILURE: Build failed/,/^\* Get more help/p' gradle-output.log | head -60
             echo "--- compiler errors, if any ---"
@@ -99,7 +101,7 @@ jobs:
         if: matrix.ffmpeg == 'true'
         run: |
           set -euo pipefail
-          apk="$(find composeApp/build/outputs/apk -name '*.apk' -print -quit)"
+          apk="$(find androidApp/build/outputs/apk -name '*.apk' -print -quit)"
           if [ -z "$apk" ]; then
             echo "::error::no APK produced"
             exit 1
@@ -118,6 +120,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nuvio-debug-apk
-          path: composeApp/build/outputs/apk/**/*.apk
+          path: androidApp/build/outputs/apk/**/*.apk
           retention-days: 14
           if-no-files-found: warn
