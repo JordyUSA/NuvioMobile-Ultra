@@ -178,24 +178,43 @@ private fun loadAudioStream(track: AVAssetTrack, isDefault: Boolean, onDone: (Ca
             ?.let { CMFormatDescriptionGetMediaSubType(it) }
             ?.let(::audioCodecForFourCc)
             ?: CastAudioCodec.UNKNOWN
-        track.loadEstimatedDataRateWithCompletionHandler { dataRate: Float, _ ->
-            track.loadLanguageCodeWithCompletionHandler { language: String?, _ ->
-                onDone(
-                    CastAudioStream(
-                        codec = codec,
-                        // AVAssetTrack has no direct channel-count accessor without decoding the
-                        // audio format description's ASBD; stereo is the overwhelmingly common
-                        // case and, unlike the video checks above, an undercount here only
-                        // affects the AAC downmix target, not whether the stream plays at all.
-                        channelCount = 2,
-                        sampleRateHz = null,
-                        bitrateBitsPerSecond = dataRate.takeIf { it > 0f }?.toLong(),
-                        language = language,
-                        isDefault = isDefault,
-                    ),
-                )
-            }
+        track.loadEstimatedDataRateWithCompletionHandler { dataRate, _ ->
+            finishAudioStream(track, codec, dataRate, isDefault, onDone)
         }
+    }
+}
+
+/**
+ * Split out from [loadAudioStream] so `dataRate`'s type comes from this function's declared
+ * parameter rather than from a lambda nested two levels deep. Kotlin infers it fine when a
+ * completion-handler lambda's tail expression is a plain call like this one; when the tail
+ * expression is instead another un-invoked completion-handler call (as it was here before this
+ * split), it cannot, and annotating the lambda parameter itself to work around that breaks the
+ * interop SAM conversion outright rather than just narrowing the type.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun finishAudioStream(
+    track: AVAssetTrack,
+    codec: CastAudioCodec,
+    dataRate: Float,
+    isDefault: Boolean,
+    onDone: (CastAudioStream) -> Unit,
+) {
+    track.loadLanguageCodeWithCompletionHandler { language, _ ->
+        onDone(
+            CastAudioStream(
+                codec = codec,
+                // AVAssetTrack has no direct channel-count accessor without decoding the audio
+                // format description's ASBD; stereo is the overwhelmingly common case and,
+                // unlike the video checks above, an undercount here only affects the AAC
+                // downmix target, not whether the stream plays at all.
+                channelCount = 2,
+                sampleRateHz = null,
+                bitrateBitsPerSecond = dataRate.takeIf { it > 0f }?.toLong(),
+                language = language,
+                isDefault = isDefault,
+            ),
+        )
     }
 }
 
