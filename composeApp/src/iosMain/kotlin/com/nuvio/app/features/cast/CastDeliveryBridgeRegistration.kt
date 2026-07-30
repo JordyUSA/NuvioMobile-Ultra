@@ -14,3 +14,7 @@ fun registerCastLocalServerBridge(bridge: CastLocalServerBridge) {
 fun registerCastTranscoderBridge(bridge: CastTranscoderBridge) {
     CastDelivery.attachTranscoderBridge(bridge)
 }
+
+fun registerCastProberBridge(bridge: CastProberBridge) {
+    CastProberHost.attach(bridge)
+}

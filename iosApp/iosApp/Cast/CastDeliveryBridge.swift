@@ -1,13 +1,13 @@
 import Foundation
 import ComposeApp
 
-/// Implements the Kotlin `CastLocalServerBridge` and `CastTranscoderBridge`, over
-/// `CastLocalServer` and `CastTranscoder`.
+/// Implements the Kotlin `CastLocalServerBridge`, `CastTranscoderBridge` and `CastProberBridge`,
+/// over `CastLocalServer` and `CastTranscoder`.
 ///
-/// Same shape as `CastBridge`: the Kotlin side (`CastDelivery.ios.kt`) drives these exactly as
-/// it drives Android's local server and media processor, without either FFmpegKit or
-/// Network.framework needing to be visible to the Kotlin compilation.
-final class CastDeliveryBridge: NSObject, CastLocalServerBridge, CastTranscoderBridge {
+/// Same shape as `CastBridge`: the Kotlin side (`CastDelivery.ios.kt`, `CastMediaProber.ios.kt`)
+/// drives these exactly as it drives Android's local server, media processor and prober, without
+/// either FFmpegKit or Network.framework needing to be visible to the Kotlin compilation.
+final class CastDeliveryBridge: NSObject, CastLocalServerBridge, CastTranscoderBridge, CastProberBridge {
 
     private let server = CastLocalServer()
     private let transcoder = CastTranscoder()
@@ -17,6 +17,7 @@ final class CastDeliveryBridge: NSObject, CastLocalServerBridge, CastTranscoderB
         let bridge = CastDeliveryBridge()
         CastDeliveryBridgeRegistrationKt.registerCastLocalServerBridge(bridge: bridge)
         CastDeliveryBridgeRegistrationKt.registerCastTranscoderBridge(bridge: bridge)
+        CastDeliveryBridgeRegistrationKt.registerCastProberBridge(bridge: bridge)
         return bridge
     }
 
@@ -84,6 +85,57 @@ final class CastDeliveryBridge: NSObject, CastLocalServerBridge, CastTranscoderB
 
     func cancel() {
         transcoder.cancel()
+    }
+
+    // MARK: - CastProberBridge
+
+    func probe(sourceUrl: String, headerNames: [String], headerValues: [String]) {
+        transcoder.probe(sourceUrl: sourceUrl, headers: Self.zip(headerNames, headerValues)) { result in
+            switch result {
+            case let .success(info):
+                CastProberHost.shared.onCompleted(
+                    success: true,
+                    message: nil,
+                    durationMs: info.durationMs,
+                    hasVideo: info.hasVideo,
+                    videoCodec: info.videoCodec,
+                    videoWidth: Int32(info.videoWidth),
+                    videoHeight: Int32(info.videoHeight),
+                    videoFrameRate: info.videoFrameRate,
+                    videoBitrateBitsPerSecond: info.videoBitrateBitsPerSecond,
+                    videoProfile: info.videoProfile,
+                    videoPixelFormat: info.videoPixelFormat,
+                    videoBitsPerRawSample: info.videoBitsPerRawSample,
+                    videoColorTransfer: info.videoColorTransfer,
+                    audioCodecs: info.audioCodecs,
+                    audioChannelCounts: info.audioChannelCounts.map { String($0) },
+                    audioSampleRates: info.audioSampleRates.map { String($0) },
+                    audioBitrates: info.audioBitrates.map { String($0) },
+                    audioLanguages: info.audioLanguages
+                )
+            case let .failure(error):
+                CastProberHost.shared.onCompleted(
+                    success: false,
+                    message: error.localizedDescription,
+                    durationMs: 0,
+                    hasVideo: false,
+                    videoCodec: "",
+                    videoWidth: 0,
+                    videoHeight: 0,
+                    videoFrameRate: 0,
+                    videoBitrateBitsPerSecond: 0,
+                    videoProfile: "",
+                    videoPixelFormat: "",
+                    videoBitsPerRawSample: "",
+                    videoColorTransfer: "",
+                    audioCodecs: [],
+                    audioChannelCounts: [],
+                    audioSampleRates: [],
+                    audioBitrates: [],
+                    audioLanguages: []
+                )
+            }
+        }
     }
 
     // MARK: -

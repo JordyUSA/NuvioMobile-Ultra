@@ -54,3 +54,22 @@ interface CastTranscoderBridge {
 
     fun cancel()
 }
+
+/**
+ * Implemented in Swift, over `CastTranscoder`'s FFprobe entry point.
+ *
+ * One probe in flight at a time, matching `CastTranscoderBridge`, so there is no request id here
+ * either — completion is reported back through `CastProberHost.onCompleted` for the same "no
+ * closure held across the Kotlin/Objective-C boundary" reason described on
+ * `CastTranscoderBridge`. Every field Swift hands back is a raw FFprobe value (a codec short
+ * name, a color-transfer string, ...); `CastMediaProber.ios.kt` does the classification into
+ * Cast's shared enums, so this interface only has to describe what FFprobe reports, not what it
+ * means.
+ */
+interface CastProberBridge {
+    fun probe(
+        sourceUrl: String,
+        headerNames: List<String>,
+        headerValues: List<String>,
+    )
+}

@@ -96,6 +96,134 @@ final class CastTranscoder {
         FFmpegKit.cancel()
     }
 
+    // MARK: - Probing
+
+    /// Raw fields read off FFprobe's stream/format JSON: the primary video stream and every
+    /// audio stream, unclassified. `CastMediaProber.ios.kt` maps codec names, the color-transfer
+    /// string and bit depth to the shared Cast enums, mirroring the split
+    /// `CastMediaProber.android.kt` already has between `MediaExtractor` extraction and
+    /// classification. Kept to scalars, strings and arrays of those — no custom bridge type —
+    /// for the same interop-stability reason `CastTranscoderBridge.start` is scalars-only.
+    struct ProbeResult {
+        let durationMs: Int64
+        let hasVideo: Bool
+        let videoCodec: String
+        let videoWidth: Int
+        let videoHeight: Int
+        let videoFrameRate: Float
+        let videoBitrateBitsPerSecond: Int64
+        /// e.g. "High Profile Level 5.1" — the exact shape `CastDeliveryPlanner.levelTimesTen`
+        /// parses, built here from FFprobe's separate `profile` and `level` fields since FFprobe
+        /// reports them apart rather than combined.
+        let videoProfile: String
+        let videoPixelFormat: String
+        let videoBitsPerRawSample: String
+        let videoColorTransfer: String
+        let audioCodecs: [String]
+        let audioChannelCounts: [Int]
+        let audioSampleRates: [Int]
+        let audioBitrates: [Int64]
+        let audioLanguages: [String]
+    }
+
+    /// Reads codec/format metadata with FFprobe, without decoding or downloading the file body —
+    /// it reads only enough of the container to parse track headers, the same reason
+    /// `MediaExtractor` is cheap to call against a remote URL on Android.
+    ///
+    /// `completion` is always called exactly once, on the main thread, within `timeoutMs` even if
+    /// FFprobe itself hangs — a slow or unresponsive remote source should not block casting
+    /// forever.
+    func probe(
+        sourceUrl: String,
+        headers: [String: String],
+        timeoutMs: Int32 = 10000,
+        completion: @escaping (Result<ProbeResult, Error>) -> Void
+    ) {
+        var arguments: [String] = ["-hide_banner"]
+        if !headers.isEmpty {
+            let joined = headers.map { "\($0.key): \($0.value)\r\n" }.joined()
+            arguments += ["-headers", joined]
+        }
+        arguments += ["-i", sourceUrl, "-show_format", "-show_streams", "-of", "json"]
+
+        // Same pre-typed-callback approach as `run` below, for the same reason: keeping the
+        // closure's type explicit turns this into ordinary already-typed-argument matching
+        // instead of a joint inference problem for Swift's type checker.
+        let completeCallback: MediaInformationSessionCompleteCallback = { (session: MediaInformationSession?) in
+            guard let session else {
+                DispatchQueue.main.async { completion(.failure(Self.error("ffprobe session was nil"))) }
+                return
+            }
+            // `getMediaInformation` is documented to return nil exactly when the command failed
+            // or the output could not be parsed — the definitive success check for this session
+            // type, unlike FFmpegSession's return-code check.
+            if let info = session.getMediaInformation() {
+                DispatchQueue.main.async { completion(.success(Self.parseProbe(info))) }
+            } else {
+                let detail = session.getFailStackTrace()
+                    ?? session.getAllLogsAsString()?.suffix(2000).description
+                    ?? "ffprobe returned no media information"
+                DispatchQueue.main.async { completion(.failure(Self.error(detail))) }
+            }
+        }
+
+        FFprobeKit.getMediaInformationFromCommandArgumentsAsync(
+            arguments,
+            withCompleteCallback: completeCallback,
+            withLogCallback: nil,
+            onDispatchQueue: DispatchQueue.global(qos: .utility),
+            withTimeout: timeoutMs
+        )
+    }
+
+    private static func parseProbe(_ info: MediaInformation) -> ProbeResult {
+        let streams = (info.getStreams() as? [StreamInformation]) ?? []
+        let video = streams.first { $0.getType() == "video" }
+        let audioStreams = streams.filter { $0.getType() == "audio" }
+
+        let durationSeconds = Double(info.getDuration() ?? "") ?? 0
+        let level = Int(video?.getStringProperty("level") ?? "") ?? 0
+        let profileName = video?.getStringProperty("profile") ?? ""
+        let profile = level > 0 ? "\(profileName) Profile Level \(Double(level) / 10.0)" : profileName
+
+        return ProbeResult(
+            durationMs: Int64(durationSeconds * 1000),
+            hasVideo: video != nil,
+            videoCodec: video?.getCodec() ?? "",
+            videoWidth: video?.getWidth()?.intValue ?? 0,
+            videoHeight: video?.getHeight()?.intValue ?? 0,
+            videoFrameRate: frameRate(video),
+            videoBitrateBitsPerSecond: Int64(video?.getBitrate() ?? "") ?? 0,
+            videoProfile: profile,
+            videoPixelFormat: video?.getStringProperty("pix_fmt") ?? "",
+            videoBitsPerRawSample: video?.getStringProperty("bits_per_raw_sample") ?? "",
+            videoColorTransfer: video?.getStringProperty("color_transfer") ?? "",
+            audioCodecs: audioStreams.map { $0.getCodec() ?? "" },
+            audioChannelCounts: audioStreams.map { Int($0.getStringProperty("channels") ?? "") ?? 2 },
+            audioSampleRates: audioStreams.map { Int($0.getSampleRate() ?? "") ?? 0 },
+            audioBitrates: audioStreams.map { Int64($0.getBitrate() ?? "") ?? 0 },
+            audioLanguages: audioStreams.map { $0.getTags()?["language"] as? String ?? "" }
+        )
+    }
+
+    /// FFprobe's real frame rate (`r_frame_rate`) is populated for effectively every container;
+    /// average (`avg_frame_rate`) is preferred when present since it accounts for variable frame
+    /// timing, but falls back to real when average is unknown ("0/0", common when duration
+    /// metadata is missing).
+    private static func frameRate(_ stream: StreamInformation?) -> Float {
+        for candidate in [stream?.getAverageFrameRate(), stream?.getRealFrameRate()] {
+            guard let candidate, !candidate.isEmpty else { continue }
+            let parts = candidate.split(separator: "/")
+            if parts.count == 2, let num = Float(parts[0]), let den = Float(parts[1]), den > 0 {
+                let value = num / den
+                if value > 0 { return value }
+            } else if let value = Float(candidate), value > 0 {
+                return value
+            }
+        }
+        return 0
+    }
+
     // MARK: - Private
 
     private func run(
