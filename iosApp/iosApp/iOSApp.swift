@@ -15,6 +15,11 @@ struct iOSApp: App {
     /// deallocate would tear down any in-flight local server or transcode.
     private let castDeliveryBridge = CastDeliveryBridge.install()
 
+    /// Backs `DlnaPlatform.ios.kt`'s SSDP discovery and SOAP control. Held for the same
+    /// lifetime reason as the two bridges above: it owns the discovery timer and any in-flight
+    /// HTTP requests, which letting it deallocate would silently cut off.
+    private let dlnaTransport = DlnaTransport.install()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
