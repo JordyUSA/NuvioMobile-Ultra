@@ -253,6 +253,7 @@ actual object DlnaPlatform {
         runCatching {
             soapPost(device.avTransportControlUrl, DlnaActions.setAvTransportUri(request.contentUrl, request.contentType, request.title))
             soapPost(device.avTransportControlUrl, DlnaActions.play())
+            Unit
         }
     }
 

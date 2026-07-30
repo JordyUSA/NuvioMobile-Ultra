@@ -15,6 +15,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import platform.Foundation.NSDate
+import platform.Foundation.timeIntervalSince1970
 import kotlin.coroutines.resume
 
 /**
