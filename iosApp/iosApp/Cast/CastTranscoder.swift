@@ -167,8 +167,8 @@ final class CastTranscoder {
             }
         }
 
-        FFprobeKit.getMediaInformationFromCommandArgumentsAsync(
-            arguments,
+        FFprobeKit.getMediaInformation(
+            fromCommandArgumentsAsync: arguments,
             withCompleteCallback: completeCallback,
             withLogCallback: nil,
             onDispatchQueue: DispatchQueue.global(qos: .utility),
