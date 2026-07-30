@@ -11,8 +11,10 @@ import androidx.compose.runtime.Composable
 import com.nuvio.app.features.cast.ui.castingAvailable
 import com.nuvio.app.features.cast.ui.CastDevicePickerDialog
 import com.nuvio.app.features.cast.ui.CastDeliveryEffect
+import com.nuvio.app.features.cast.ui.CastReceiver
 import com.nuvio.app.features.cast.CastStreamRequest
 import com.nuvio.app.features.cast.CastPlatform
+import com.nuvio.app.features.cast.dlna.DlnaPlatform
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
@@ -755,8 +757,11 @@ private fun PlayerScreenRuntime.RenderCastPicker() {
     if (showCastPicker) {
         CastDevicePickerDialog(
             onDismiss = { showCastPicker = false },
-            onDeviceSelected = { device ->
-                CastPlatform.connect(device)
+            onDeviceSelected = { receiver ->
+                when (receiver) {
+                    is CastReceiver.Chromecast -> CastPlatform.connect(receiver.device)
+                    is CastReceiver.Dlna -> DlnaPlatform.connect(receiver.device)
+                }
                 showCastPicker = false
             },
         )

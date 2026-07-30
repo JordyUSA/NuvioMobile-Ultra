@@ -28,72 +28,125 @@ import com.nuvio.app.features.cast.CastDevice
 import com.nuvio.app.features.cast.CastIncompatibility
 import com.nuvio.app.features.cast.CastPlatform
 import com.nuvio.app.features.cast.CastStreamRequest
+import com.nuvio.app.features.cast.dlna.DlnaConnectionState
+import com.nuvio.app.features.cast.dlna.DlnaDevice
+import com.nuvio.app.features.cast.dlna.DlnaPlatform
 
 /**
  * Whether the Cast affordance should be shown at all.
  *
- * False on platforms without a Cast implementation, so the caller can omit the button rather
- * than render a control that cannot do anything.
+ * False on platforms without either transport, so the caller can omit the button rather than
+ * render a control that cannot do anything.
  */
 val castingAvailable: Boolean
-    get() = CastPlatform.isSupported
+    get() = CastPlatform.isSupported || DlnaPlatform.isSupported
 
 /**
- * Receiver picker.
+ * A receiver reachable on the local network, regardless of which protocol it speaks —
+ * [CastDevicePickerDialog] lists Chromecast and DLNA renderers side by side under this one type
+ * so the caller doesn't need to know or care which transport a given row is.
+ */
+sealed interface CastReceiver {
+    val id: String
+    val name: String
+    val modelName: String?
+    val protocolLabel: String
+
+    data class Chromecast(val device: CastDevice) : CastReceiver {
+        override val id get() = device.id
+        override val name get() = device.name
+        override val modelName get() = device.modelName
+        override val protocolLabel get() = "Chromecast"
+    }
+
+    data class Dlna(val device: DlnaDevice) : CastReceiver {
+        override val id get() = device.id
+        override val name get() = device.name
+        override val modelName get() = device.modelName
+        override val protocolLabel get() = "DLNA"
+    }
+}
+
+/**
+ * Receiver picker, merging Chromecast and DLNA devices into one list.
  *
- * Discovery runs only while this dialog is on screen: mDNS browsing keeps the radio busy, so
- * it is scoped to the moment the user is actually choosing a device.
+ * Discovery runs only while this dialog is on screen: both mDNS and SSDP browsing keep the
+ * radio busy, so they're scoped to the moment the user is actually choosing a device. Only one
+ * receiver is ever active at a time — selecting a device on one transport disconnects whichever
+ * device is connected on the other, matching [CastDelivery]'s single-session model.
  */
 @Composable
 fun CastDevicePickerDialog(
     onDismiss: () -> Unit,
-    onDeviceSelected: (CastDevice) -> Unit,
+    onDeviceSelected: (CastReceiver) -> Unit,
 ) {
-    val devices by CastPlatform.devices.collectAsState()
-    val connection by CastPlatform.connection.collectAsState()
+    val chromecastDevices by CastPlatform.devices.collectAsState()
+    val dlnaDevices by DlnaPlatform.devices.collectAsState()
+    val receivers = remember(chromecastDevices, dlnaDevices) {
+        chromecastDevices.map(CastReceiver::Chromecast) + dlnaDevices.map(CastReceiver::Dlna)
+    }
+
+    val castConnection by CastPlatform.connection.collectAsState()
+    val dlnaConnection by DlnaPlatform.connection.collectAsState()
 
     DisposableEffect(Unit) {
         CastPlatform.startDiscovery()
-        onDispose { CastPlatform.stopDiscovery() }
+        DlnaPlatform.startDiscovery()
+        onDispose {
+            CastPlatform.stopDiscovery()
+            DlnaPlatform.stopDiscovery()
+        }
     }
 
-    val connected = (connection as? CastConnectionState.Connected)?.device
+    val connectedName = (castConnection as? CastConnectionState.Connected)?.device?.name
+        ?: (dlnaConnection as? DlnaConnectionState.Connected)?.device?.name
+    val connecting = castConnection is CastConnectionState.Connecting
+    val failureMessage = (castConnection as? CastConnectionState.Failed)?.message
+        ?: (dlnaConnection as? DlnaConnectionState.Failed)?.message
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (connected != null) "Casting to ${connected.name}" else "Cast to") },
+        title = { Text(if (connectedName != null) "Casting to $connectedName" else "Cast to") },
         text = {
             Column {
                 when {
-                    connection is CastConnectionState.Connecting -> Text("Connecting…")
-                    devices.isEmpty() -> Text("Looking for devices on your Wi‑Fi…")
-                    else -> devices.forEach { device ->
+                    connecting -> Text("Connecting…")
+                    receivers.isEmpty() -> Text("Looking for devices on your Wi‑Fi…")
+                    else -> receivers.forEach { receiver ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onDeviceSelected(device) }
+                                .clickable {
+                                    // Only one receiver is active at a time, so switching
+                                    // transports drops whichever one is currently connected.
+                                    when (receiver) {
+                                        is CastReceiver.Dlna -> CastPlatform.disconnect()
+                                        is CastReceiver.Chromecast -> DlnaPlatform.disconnect()
+                                    }
+                                    onDeviceSelected(receiver)
+                                }
                                 .padding(vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column {
-                                Text(device.name, style = MaterialTheme.typography.bodyLarge)
-                                device.modelName?.let {
-                                    Text(it, style = MaterialTheme.typography.bodySmall)
-                                }
+                                Text(receiver.name, style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    listOfNotNull(receiver.modelName, receiver.protocolLabel).joinToString(" · "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
                             }
                         }
                     }
                 }
-                (connection as? CastConnectionState.Failed)?.let {
-                    Text(it.message, style = MaterialTheme.typography.bodySmall)
-                }
+                failureMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         },
         confirmButton = {
-            if (connected != null) {
+            if (connectedName != null) {
                 TextButton(onClick = {
                     CastDelivery.cancel()
                     CastPlatform.disconnect()
+                    DlnaPlatform.disconnect()
                     onDismiss()
                 }) { Text("Stop casting") }
             } else {
@@ -104,7 +157,8 @@ fun CastDevicePickerDialog(
 }
 
 /**
- * Starts casting [request] as soon as a session is established, and reports progress.
+ * Starts casting [request] as soon as a session is established on either transport, and reports
+ * progress.
  *
  * Kept separate from the picker so the connect step and the deliver step do not race: the
  * receiver has to be connected before the planner can know what it supports.
@@ -114,14 +168,17 @@ fun CastDeliveryEffect(
     request: CastStreamRequest?,
     onFinished: (Result<Unit>) -> Unit = {},
 ) {
-    val connection by CastPlatform.connection.collectAsState()
+    val castConnection by CastPlatform.connection.collectAsState()
+    val dlnaConnection by DlnaPlatform.connection.collectAsState()
+    val connectedName = (castConnection as? CastConnectionState.Connected)?.device?.name
+        ?: (dlnaConnection as? DlnaConnectionState.Connected)?.device?.name
     var lastCastUrl by remember { mutableStateOf<String?>(null) }
 
     // The work runs in LaunchedEffect's own scope, so leaving the player cancels an in-flight
     // transcode rather than leaving it running against a discarded composition.
-    LaunchedEffect(connection, request?.url) {
+    LaunchedEffect(connectedName, request?.url) {
         val target = request ?: return@LaunchedEffect
-        if (connection !is CastConnectionState.Connected) return@LaunchedEffect
+        if (connectedName == null) return@LaunchedEffect
         if (lastCastUrl == target.url) return@LaunchedEffect
         lastCastUrl = target.url
         onFinished(CastDelivery.cast(target))

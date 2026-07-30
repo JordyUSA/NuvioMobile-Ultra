@@ -2,8 +2,6 @@ package com.nuvio.app.features.cast
 
 import android.content.Context
 import android.util.Log
-import com.nuvio.app.features.cast.model.CastReceiverProfile
-import com.nuvio.app.features.cast.model.capabilitiesFor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,14 +29,11 @@ actual object CastDelivery {
         val context = appContext
             ?: return fail("Casting is not initialised")
 
-        val device = (CastPlatform.connection.value as? CastConnectionState.Connected)?.device
-            ?: return fail("No Cast device connected")
+        val receiver = resolveActiveReceiver() ?: return fail("No Cast device connected")
 
         releasePrevious()
 
-        val capabilities = capabilitiesFor(
-            CastReceiverProfile.forModel(device.modelName, device.hasVideoOutput),
-        )
+        val capabilities = receiver.capabilities
 
         // --- Probe ---------------------------------------------------------------------
         _status.value = CastDeliveryStatus.Probing
@@ -61,7 +56,7 @@ actual object CastDelivery {
         )
 
         if (plan.mode == CastDeliveryMode.UNSUPPORTED) {
-            return fail("${device.name} cannot play video")
+            return fail("${receiver.name} cannot play video")
         }
 
         // --- Produce a playable source -------------------------------------------------
@@ -113,7 +108,7 @@ actual object CastDelivery {
         }
 
         // --- Hand off ------------------------------------------------------------------
-        val result = CastPlatform.load(
+        val result = receiver.deliver(
             CastMediaRequest(
                 contentUrl = contentUrl,
                 contentType = contentType,
