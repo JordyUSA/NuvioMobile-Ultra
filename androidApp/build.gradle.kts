@@ -108,6 +108,8 @@ android {
                 "lib/*/libc++_shared.so",
                 "lib/*/libavcodec.so",
                 "lib/*/libavdevice.so",
+                "lib/*/libavfilter.so",
+                "lib/*/libavformat.so",
                 "lib/*/libavutil.so",
                 "lib/*/libswscale.so",
                 "lib/*/libswresample.so"
