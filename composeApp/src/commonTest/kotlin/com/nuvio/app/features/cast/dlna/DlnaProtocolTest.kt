@@ -370,6 +370,37 @@ class SoapTest {
     }
 }
 
+class SoapFaultTest {
+
+    private val fault = "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">" +
+        "<s:Body><s:Fault><faultcode>s:Client</faultcode><faultstring>UPnPError</faultstring>" +
+        "<detail><UPnPError xmlns=\"urn:schemas-upnp-org:control-1-0\">" +
+        "<errorCode>701</errorCode><errorDescription>Transition not available</errorDescription>" +
+        "</UPnPError></detail></s:Fault></s:Body></s:Envelope>"
+
+    @Test
+    fun `the upnp error code and description are what explain a refusal`() {
+        assertEquals("701 Transition not available", parseSoapFault(fault))
+    }
+
+    @Test
+    fun `a fault carrying only a faultstring still says something`() {
+        val bare = "<s:Fault><faultcode>s:Client</faultcode><faultstring>UPnPError</faultstring></s:Fault>"
+        assertEquals("UPnPError", parseSoapFault(bare))
+    }
+
+    @Test
+    fun `a successful response is not a fault`() {
+        val ok = "<s:Envelope><s:Body><u:PlayResponse></u:PlayResponse></s:Body></s:Envelope>"
+        assertNull(parseSoapFault(ok))
+    }
+
+    @Test
+    fun `an empty body is not a fault`() {
+        assertNull(parseSoapFault(""))
+    }
+}
+
 class UpnpTimeTest {
 
     @Test

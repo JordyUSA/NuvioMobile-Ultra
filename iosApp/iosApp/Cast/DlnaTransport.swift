@@ -261,7 +261,7 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
             request.httpBody = body.data(using: .utf8)
         }
 
-        URLSession.shared.dataTask(with: request) { data, _, error in
+        URLSession.shared.dataTask(with: request) { data, response, error in
             if let error {
                 self.onMain {
                     DlnaPlatform.shared.onHttpResult(requestId: requestId, success: false, body: nil, message: error.localizedDescription)
@@ -269,6 +269,17 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
                 return
             }
             let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            // The status was previously discarded, so a renderer refusing an action with a 500
+            // SOAP Fault came back as a success and the stream was reported as playing while
+            // the television sat idle. The body is still passed through: the fault detail is in
+            // it, and Kotlin does the parsing.
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200...299).contains(status) else {
+                self.onMain {
+                    DlnaPlatform.shared.onHttpResult(requestId: requestId, success: false, body: text, message: "HTTP \(status)")
+                }
+                return
+            }
             self.onMain {
                 DlnaPlatform.shared.onHttpResult(requestId: requestId, success: true, body: text, message: nil)
             }

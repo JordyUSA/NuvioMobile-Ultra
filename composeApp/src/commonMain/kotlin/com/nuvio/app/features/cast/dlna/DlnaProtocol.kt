@@ -229,6 +229,26 @@ fun parseSoapResponse(xml: String, action: String): Map<String, String> {
         .associate { it.groupValues[1] to unescapeXml(it.groupValues[2].trim()) }
 }
 
+/**
+ * A human-readable description of a UPnP SOAP Fault, or null when [xml] isn't one.
+ *
+ * A renderer refusing an action answers HTTP 500 with a `<s:Fault>` carrying a UPnP `errorCode`.
+ * That code is the only thing that says *why* — "701 Transition not available", "714 Illegal MIME
+ * type" — so it is worth pulling out rather than reporting a bare status.
+ */
+fun parseSoapFault(xml: String): String? {
+    if (!xml.contains("Fault", ignoreCase = true)) return null
+    val code = extractTag(xml, "errorCode")
+    val description = extractTag(xml, "errorDescription")
+    val faultString = extractTag(xml, "faultstring")
+    return when {
+        code != null -> listOfNotNull(code, description).joinToString(" ")
+        description != null -> description
+        faultString != null -> faultString
+        else -> null
+    }
+}
+
 /** Every AVTransport/RenderingControl/ConnectionManager action this app needs, pre-built. */
 object DlnaActions {
     fun setAvTransportUri(contentUrl: String, contentType: String, title: String): DlnaSoapCall = soapCall(

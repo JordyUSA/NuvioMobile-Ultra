@@ -453,12 +453,24 @@ actual object DlnaPlatform {
             setRequestProperty("SOAPACTION", call.soapActionHeader)
         }
         connection.outputStream.use { it.write(call.body.toByteArray(Charsets.UTF_8)) }
-        val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
-        return try {
+        val status = connection.responseCode
+        val ok = status in 200..299
+        val stream = if (ok) connection.inputStream else connection.errorStream
+        val body = try {
             stream?.bufferedReader()?.use { it.readText() } ?: ""
         } finally {
             connection.disconnect()
         }
+        // A renderer that refuses an action answers 500 with a SOAP Fault. Returning that body
+        // as though it were a result made every failure look like a success to load(), which
+        // then reported the stream as playing while the television sat idle.
+        if (!ok) {
+            val detail = parseSoapFault(body)
+            throw IllegalStateException(
+                if (detail != null) "${call.action} failed: $detail" else "${call.action} failed (HTTP $status)",
+            )
+        }
+        return body
     }
 
     private const val TAG = "DlnaPlatform"

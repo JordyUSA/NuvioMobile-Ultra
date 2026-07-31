@@ -315,7 +315,14 @@ actual object DlnaPlatform {
             if (success) {
                 Result.success(body.orEmpty())
             } else {
-                Result.failure(IllegalStateException(message ?: "Request failed"))
+                // On a refusal Swift passes the body through as well, because the UPnP errorCode
+                // inside the SOAP Fault is the only part that says why.
+                val detail = body?.let(::parseSoapFault)
+                Result.failure(
+                    IllegalStateException(
+                        listOfNotNull(message, detail).joinToString(": ").ifBlank { "Request failed" },
+                    ),
+                )
             },
         )
     }

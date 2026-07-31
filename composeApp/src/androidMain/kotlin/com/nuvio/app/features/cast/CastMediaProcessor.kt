@@ -89,12 +89,15 @@ class Media3CastMediaProcessor(private val context: Context) : CastMediaProcesso
                 }
             }
 
-            val builder = Transformer.Builder(context)
-                .addListener(listener)
-                // The receiver profile always lands on H.264 + AAC in an MP4, which is the
-                // one combination every Cast device accepts.
-                .setVideoMimeType(MimeTypes.VIDEO_H264)
-                .setAudioMimeType(MimeTypes.AUDIO_AAC)
+            val builder = Transformer.Builder(context).addListener(listener)
+
+            // Only pin an output codec for a track the plan actually wants re-encoded.
+            // Transformer's default — leaving the MIME type unset — means "same as the input",
+            // which is what lets it transmux. Setting these unconditionally forced a full
+            // re-encode even on a REMUX plan, so a receiver that decodes the source natively
+            // (HEVC on an Ultra, say) still paid for a transcode the planner had ruled out.
+            if (plan.videoTarget != null) builder.setVideoMimeType(MimeTypes.VIDEO_H264)
+            if (plan.audioTarget != null) builder.setAudioMimeType(MimeTypes.AUDIO_AAC)
 
             val videoEffects = buildList {
                 plan.videoTarget?.let { target ->

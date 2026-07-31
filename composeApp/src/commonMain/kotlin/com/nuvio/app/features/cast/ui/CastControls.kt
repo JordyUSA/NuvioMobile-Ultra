@@ -28,6 +28,9 @@ import com.nuvio.app.features.cast.CastDevice
 import com.nuvio.app.features.cast.CastIncompatibility
 import com.nuvio.app.features.cast.CastPlatform
 import com.nuvio.app.features.cast.CastStreamRequest
+import com.nuvio.app.features.cast.CastTransport
+import com.nuvio.app.features.cast.resolveActiveReceiver
+import com.nuvio.app.features.cast.selectedCastTransport
 import com.nuvio.app.features.cast.dlna.DlnaConnectionState
 import com.nuvio.app.features.cast.dlna.DlnaDevice
 import com.nuvio.app.features.cast.dlna.DlnaPlatform
@@ -119,9 +122,18 @@ fun CastDevicePickerDialog(
                                 .clickable {
                                     // Only one receiver is active at a time, so switching
                                     // transports drops whichever one is currently connected.
+                                    // Recording the choice matters because the teardown is not
+                                    // instantaneous: until it completes both transports report
+                                    // themselves connected, and this is what tells them apart.
                                     when (receiver) {
-                                        is CastReceiver.Dlna -> CastPlatform.disconnect()
-                                        is CastReceiver.Chromecast -> DlnaPlatform.disconnect()
+                                        is CastReceiver.Dlna -> {
+                                            selectedCastTransport = CastTransport.DLNA
+                                            CastPlatform.disconnect()
+                                        }
+                                        is CastReceiver.Chromecast -> {
+                                            selectedCastTransport = CastTransport.CHROMECAST
+                                            DlnaPlatform.disconnect()
+                                        }
                                     }
                                     onDeviceSelected(receiver)
                                 }
@@ -168,19 +180,25 @@ fun CastDeliveryEffect(
     request: CastStreamRequest?,
     onFinished: (Result<Unit>) -> Unit = {},
 ) {
+    // Collected purely so a connection change recomposes this and re-resolves the receiver
+    // below through the same rule CastDelivery itself uses.
     val castConnection by CastPlatform.connection.collectAsState()
     val dlnaConnection by DlnaPlatform.connection.collectAsState()
-    val connectedName = (castConnection as? CastConnectionState.Connected)?.device?.name
-        ?: (dlnaConnection as? DlnaConnectionState.Connected)?.device?.name
-    var lastCastUrl by remember { mutableStateOf<String?>(null) }
+    val receiverId = remember(castConnection, dlnaConnection) { resolveActiveReceiver()?.id }
+
+    // Keyed by receiver as well as URL. Keyed by URL alone, moving the same title to a second
+    // television did nothing at all: the effect re-ran, saw the unchanged URL and returned
+    // early, leaving the newly picked receiver black.
+    var lastDelivered by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     // The work runs in LaunchedEffect's own scope, so leaving the player cancels an in-flight
     // transcode rather than leaving it running against a discarded composition.
-    LaunchedEffect(connectedName, request?.url) {
+    LaunchedEffect(receiverId, request?.url) {
         val target = request ?: return@LaunchedEffect
-        if (connectedName == null) return@LaunchedEffect
-        if (lastCastUrl == target.url) return@LaunchedEffect
-        lastCastUrl = target.url
+        val receiver = receiverId ?: return@LaunchedEffect
+        val delivery = receiver to target.url
+        if (lastDelivered == delivery) return@LaunchedEffect
+        lastDelivered = delivery
         onFinished(CastDelivery.cast(target))
     }
 }
