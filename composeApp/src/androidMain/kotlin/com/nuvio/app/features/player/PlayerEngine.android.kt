@@ -3,16 +3,15 @@ package com.nuvio.app.features.player
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.media.audiofx.LoudnessEnhancer
 import android.text.SpannableString
 import android.net.Uri
 import android.util.Log
 import android.util.TypedValue
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.Build
 import android.os.SystemClock
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
-import android.view.SurfaceHolder
 import android.util.AttributeSet
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -40,6 +40,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.VideoSize
 import androidx.media3.common.text.Cue
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
@@ -72,15 +73,13 @@ import `is`.xyz.mpv.Utils
 import io.github.peerless2012.ass.media.widget.AssSubtitleView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.net.HttpURLConnection
-import java.net.URI
 import java.net.URL
-import java.util.Locale
 
 private const val TAG = "NuvioPlayer"
 private const val PLAYER_DIAGNOSTIC_TAG = "NuvioPlayerDiag"
@@ -115,19 +114,17 @@ actual fun PlatformPlayerSurface(
         PlayerSettingsRepository.ensureLoaded()
         PlayerSettingsRepository.uiState.value
     }
-    val normalizedStreamType = normalizeStreamType(streamType)
-    val isDirectMatroska = normalizedStreamType.isMatroskaStreamType()
     val playerSourceKey = listOf(
         sourceUrl,
         sourceAudioUrl.orEmpty(),
         sanitizePlaybackHeaders(sourceHeaders),
         sanitizePlaybackResponseHeaders(sourceResponseHeaders),
-        normalizedStreamType.orEmpty(),
+        normalizeStreamType(streamType).orEmpty(),
         useYoutubeChunkedPlayback,
         initialPositionRequestKey.orEmpty(),
     )
     var activeEngine by remember(playerSourceKey, playerSettings.androidPlaybackEngine) {
-        mutableStateOf(playerSettings.androidPlaybackEngine.initialAndroidEngine(normalizedStreamType))
+        mutableStateOf(playerSettings.androidPlaybackEngine.initialAndroidEngine())
     }
 
     when (activeEngine) {
@@ -176,7 +173,7 @@ actual fun PlatformPlayerSurface(
                 playWhenReady = playWhenReady,
                 resizeMode = resizeMode,
                 videoOutput = playerSettings.androidLibmpvVideoOutput,
-                hardwareDecodingEnabled = playerSettings.androidLibmpvHardwareDecodingEnabled && !isDirectMatroska,
+                hardwareDecodingEnabled = playerSettings.androidLibmpvHardwareDecodingEnabled,
                 yuv420pEnabled = playerSettings.androidLibmpvYuv420pEnabled,
                 onControllerReady = onControllerReady,
                 onSnapshot = onSnapshot,
@@ -191,16 +188,12 @@ private enum class ResolvedAndroidPlaybackEngine {
     Libmpv,
 }
 
-private fun AndroidPlaybackEngine.initialAndroidEngine(streamType: String?): ResolvedAndroidPlaybackEngine =
-    when {
-        streamType.isMatroskaStreamType() -> ResolvedAndroidPlaybackEngine.Libmpv
-        this == AndroidPlaybackEngine.ExoPlayer -> ResolvedAndroidPlaybackEngine.ExoPlayer
-        this == AndroidPlaybackEngine.Libmpv -> ResolvedAndroidPlaybackEngine.Libmpv
-        else -> ResolvedAndroidPlaybackEngine.ExoPlayer
+private fun AndroidPlaybackEngine.initialAndroidEngine(): ResolvedAndroidPlaybackEngine =
+    when (this) {
+        AndroidPlaybackEngine.Auto,
+        AndroidPlaybackEngine.ExoPlayer -> ResolvedAndroidPlaybackEngine.ExoPlayer
+        AndroidPlaybackEngine.Libmpv -> ResolvedAndroidPlaybackEngine.Libmpv
     }
-
-private fun String?.isMatroskaStreamType(): Boolean =
-    this == "matroska" || this == "mkv"
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
@@ -263,6 +256,9 @@ private fun ExoPlayerSurface(
     var selectedExternalSubtitleMimeType by remember(playerSourceKey) { mutableStateOf<String?>(null) }
     val latestSubtitleDelayMs = rememberUpdatedState(subtitleDelayMs)
     val latestExternalSubtitleMimeType = rememberUpdatedState(selectedExternalSubtitleMimeType)
+    var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
+    var videoAspectRatio by remember(playerSourceKey) { mutableStateOf(0f) }
+    val latestVideoAspectRatio = rememberUpdatedState(videoAspectRatio)
     var decoderPriorityOverride by remember(playerSourceKey) { mutableStateOf<Int?>(null) }
     var fallbackStartPositionMs by remember(playerSourceKey) { mutableStateOf<Long?>(null) }
     val effectiveDecoderPriority = decoderPriorityOverride ?: playerSettings.decoderPriority
@@ -343,7 +339,6 @@ private fun ExoPlayerSurface(
         normalizedStreamType,
         useYoutubeChunkedPlayback,
         effectiveDecoderPriority,
-        playerSettings.androidMemorySafeBufferEnabled,
         initialPositionRequestKey,
     ) {
         val renderersFactory = SubtitleOffsetRenderersFactory(
@@ -351,6 +346,9 @@ private fun ExoPlayerSurface(
             subtitleDelayUsProvider = { latestSubtitleDelayMs.value.toLong() * 1_000L },
             shouldNormalizeCuePositionProvider = {
                 latestExternalSubtitleMimeType.value == MimeTypes.TEXT_VTT
+            },
+            videoBoundsFractionProvider = {
+                playerViewRef?.videoBoundsFraction(latestVideoAspectRatio.value)
             },
         )
             .setExtensionRendererMode(effectiveDecoderPriority)
@@ -367,7 +365,15 @@ private fun ExoPlayerSurface(
             }
         }
 
-        val loadControl = buildAndroidLoadControl(playerSettings.androidMemorySafeBufferEnabled)
+        val loadControl = DefaultLoadControl.Builder()
+            .setTargetBufferBytes(100 * 1024 * 1024)
+            .setBufferDurationsMs(
+                15_000,
+                70_000,
+                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                5_000
+            )
+            .build()
 
         val player = if (useLibass) {
             ExoPlayer.Builder(context)
@@ -451,36 +457,13 @@ private fun ExoPlayerSurface(
 
     val pendingSubtitleTrackIndex = remember { mutableListOf<Int>() }
     val pendingAudioTrackSelection = remember { mutableListOf<TrackSelectionSnapshot>() }
-    var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var currentSubtitleStyle by remember { mutableStateOf(SubtitleStyleState.DEFAULT) }
     var subtitleSelectionJob by remember { mutableStateOf<Job?>(null) }
-    var loudnessEnhancer by remember(exoPlayer) { mutableStateOf<LoudnessEnhancer?>(null) }
+    val isInPip = rememberIsInPictureInPicture()
+    val pipSubtitleScale by rememberUpdatedState(if (isInPip) 0.4f else 1.0f)
 
     fun syncPlayerViewKeepScreenOn() {
         playerViewRef?.keepScreenOn = exoPlayer.shouldKeepPlayerScreenOn()
-    }
-
-    fun applyExoVolumeBoost(multiplier: Float) {
-        val boost = multiplier.coerceIn(1f, 2f)
-        val targetGainMb = ((boost - 1f) * 1200f).toInt().coerceIn(0, 1200)
-        val sessionId = exoPlayer.audioSessionId
-        if (targetGainMb <= 0 || sessionId == C.AUDIO_SESSION_ID_UNSET) {
-            loudnessEnhancer?.enabled = false
-            exoPlayer.volume = 1f
-            return
-        }
-        val enhancer = loudnessEnhancer ?: runCatching {
-            LoudnessEnhancer(sessionId).also { loudnessEnhancer = it }
-        }.getOrNull()
-        enhancer?.let {
-            runCatching {
-                it.setTargetGain(targetGainMb)
-                it.enabled = true
-            }.onFailure { error ->
-                Log.w(TAG, "Failed to apply LoudnessEnhancer volume boost", error)
-            }
-        }
-        exoPlayer.volume = 1f
     }
 
     fun preserveAudioSelectionForReload(reason: String) {
@@ -493,6 +476,16 @@ private fun ExoPlayerSurface(
     DisposableEffect(exoPlayer) {
         PlayerPictureInPictureManager.registerPausePlaybackCallback {
             exoPlayer.pause()
+        }
+        PlayerPictureInPictureManager.registerTogglePlaybackCallback {
+            if (exoPlayer.isPlaying) {
+                exoPlayer.pause()
+            } else {
+                if (exoPlayer.playbackState == androidx.media3.common.Player.STATE_ENDED) {
+                    exoPlayer.seekTo(0L)
+                }
+                exoPlayer.play()
+            }
         }
 
         fun reportPlayerError(error: PlaybackException) {
@@ -515,10 +508,6 @@ private fun ExoPlayerSurface(
         }
 
         val listener = object : Player.Listener {
-            override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                applyExoVolumeBoost(playerSettings.volumeBoostPercent / 100f)
-            }
-
             override fun onPlayerError(error: PlaybackException) {
                 syncPlayerViewKeepScreenOn()
                 Log.e(
@@ -595,7 +584,7 @@ private fun ExoPlayerSurface(
                     exoPlayer.logCurrentTracks("STATE_READY")
                 }
                 syncPlayerViewKeepScreenOn()
-                latestOnSnapshot.value(exoPlayer.snapshot())
+                dispatchExoPlayerSnapshot()
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -606,7 +595,7 @@ private fun ExoPlayerSurface(
                         "positionMs=${exoPlayer.currentPosition.coerceAtLeast(0L)}",
                 )
                 syncPlayerViewKeepScreenOn()
-                latestOnSnapshot.value(exoPlayer.snapshot())
+                dispatchExoPlayerSnapshot()
             }
 
             override fun onRenderedFirstFrame() {
@@ -619,7 +608,14 @@ private fun ExoPlayerSurface(
             }
 
             override fun onPlaybackParametersChanged(playbackParameters: androidx.media3.common.PlaybackParameters) {
+                dispatchExoPlayerSnapshot()
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
                 latestOnSnapshot.value(exoPlayer.snapshot())
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoAspectRatio = videoSize.width.toFloat() / videoSize.height.toFloat()
+                }
             }
 
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
@@ -643,16 +639,15 @@ private fun ExoPlayerSurface(
                         exoPlayer.selectTrackByIndex(C.TRACK_TYPE_TEXT, idx)
                     }
                 }
-                latestOnSnapshot.value(exoPlayer.snapshot())
+                dispatchExoPlayerSnapshot()
             }
 
         }
         exoPlayer.addListener(listener)
         onDispose {
             PlayerPictureInPictureManager.registerPausePlaybackCallback(null)
+            PlayerPictureInPictureManager.registerTogglePlaybackCallback(null)
             exoPlayer.removeListener(listener)
-            loudnessEnhancer?.release()
-            loudnessEnhancer = null
             playerViewRef?.keepScreenOn = false
             subtitleSelectionJob?.cancel()
         }
@@ -667,7 +662,8 @@ private fun ExoPlayerSurface(
                     val isInPictureInPicture =
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && activity?.isInPictureInPictureMode == true
                     val isFinishing = activity?.isFinishing == true
-                    if (!isInPictureInPicture || isFinishing) {
+                    val hasActiveNowPlayingSession = nowPlayingController.isActive
+                    if ((!isInPictureInPicture && !hasActiveNowPlayingSession) || isFinishing) {
                         exoPlayer.pause()
                     }
                 }
@@ -684,7 +680,7 @@ private fun ExoPlayerSurface(
     LaunchedEffect(exoPlayer, playWhenReady) {
         exoPlayer.playWhenReady = latestPlayWhenReady.value
         syncPlayerViewKeepScreenOn()
-        latestOnSnapshot.value(exoPlayer.snapshot())
+        dispatchExoPlayerSnapshot()
     }
 
     LaunchedEffect(exoPlayer) {
@@ -716,8 +712,12 @@ private fun ExoPlayerSurface(
                     exoPlayer.setPlaybackSpeed(speed)
                 }
 
-                override fun setVolumeBoost(multiplier: Float) {
-                    applyExoVolumeBoost(multiplier)
+                override fun updateNowPlayingMetadata(info: PlayerNowPlayingInfo) {
+                    nowPlayingController.updateMetadata(info)
+                }
+
+                override fun clearNowPlayingInfo() {
+                    nowPlayingController.clear()
                 }
 
                 override fun getAudioTracks(): List<AudioTrack> =
@@ -836,7 +836,7 @@ private fun ExoPlayerSurface(
 
                 override fun applySubtitleStyle(style: SubtitleStyleState) {
                     currentSubtitleStyle = style
-                    playerViewRef?.applySubtitleStyle(style)
+                    playerViewRef?.applySubtitleStyle(style, pipSubtitleScale)
                 }
 
                 override fun setSubtitleDelayMs(delayMs: Int) {
@@ -848,7 +848,7 @@ private fun ExoPlayerSurface(
 
     LaunchedEffect(exoPlayer) {
         while (isActive) {
-            latestOnSnapshot.value(exoPlayer.snapshot())
+            dispatchExoPlayerSnapshot()
             delay(250L)
         }
     }
@@ -869,7 +869,7 @@ private fun ExoPlayerSurface(
                     enabled = useLibass,
                     renderType = libassRenderType,
                 )
-                applySubtitleStyle(currentSubtitleStyle)
+                applySubtitleStyle(currentSubtitleStyle, pipSubtitleScale)
             }
         },
         update = { playerView ->
@@ -883,7 +883,7 @@ private fun ExoPlayerSurface(
                 enabled = useLibass,
                 renderType = libassRenderType,
             )
-            playerView.applySubtitleStyle(currentSubtitleStyle)
+            playerView.applySubtitleStyle(currentSubtitleStyle, pipSubtitleScale)
         },
     )
 }
@@ -914,8 +914,25 @@ private fun LibmpvPlayerSurface(
         sanitizePlaybackHeaders(sourceHeaders)
     }
     var playerViewRef by remember { mutableStateOf<NuvioLibmpvView?>(null) }
+    val nowPlayingController = remember(context, playerViewRef) {
+        playerViewRef?.let { view ->
+            AndroidPlayerNowPlayingController(
+                context = context,
+                controls = AndroidPlayerNowPlayingController.PlaybackControls(
+                    play = { view.setPaused(false) },
+                    pause = { view.setPaused(true) },
+                    seekTo = { positionMs -> view.seekToMs(positionMs) },
+                    seekBy = { offsetMs -> view.seekByMs(offsetMs) },
+                ),
+            )
+        }
+    }
 
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(nowPlayingController) {
+        onDispose { nowPlayingController?.release() }
+    }
+
+    DisposableEffect(lifecycleOwner, nowPlayingController) {
         val activity = context.findActivity()
         val observer = LifecycleEventObserver { _, event ->
             val view = playerViewRef ?: return@LifecycleEventObserver
@@ -925,7 +942,8 @@ private fun LibmpvPlayerSurface(
                     val isInPictureInPicture =
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && activity?.isInPictureInPictureMode == true
                     val isFinishing = activity?.isFinishing == true
-                    if (!isInPictureInPicture || isFinishing) {
+                    val hasActiveNowPlayingSession = nowPlayingController?.isActive == true
+                    if ((!isInPictureInPicture && !hasActiveNowPlayingSession) || isFinishing) {
                         view.setPaused(true)
                     }
                 }
@@ -938,11 +956,13 @@ private fun LibmpvPlayerSurface(
         }
     }
 
-    DisposableEffect(playerViewRef) {
+    DisposableEffect(playerViewRef, nowPlayingController) {
         val view = playerViewRef ?: return@DisposableEffect onDispose {}
         fun dispatchSnapshot(updateKeepScreenOn: Boolean = false) {
             coroutineScope.launch(Dispatchers.Main.immediate) {
-                latestOnSnapshot.value(view.snapshot())
+                val snapshot = view.snapshot()
+                latestOnSnapshot.value(snapshot)
+                nowPlayingController?.syncPlayback(snapshot)
                 if (updateKeepScreenOn) {
                     view.keepScreenOn = view.shouldKeepScreenOn()
                 }
@@ -951,14 +971,8 @@ private fun LibmpvPlayerSurface(
         val observer = object : MPV.EventObserver {
             override fun eventProperty(property: String) = Unit
             override fun eventProperty(property: String, value: Long) {
-                if (
-                    property == "cache-buffering-state" ||
-                    property == "video-params/w" ||
-                    property == "video-params/h" ||
-                    property == "video-out-params/w" ||
-                    property == "video-out-params/h"
-                ) {
-                    dispatchSnapshot(updateKeepScreenOn = property == "cache-buffering-state")
+                if (property == "cache-buffering-state") {
+                    dispatchSnapshot(updateKeepScreenOn = true)
                 }
             }
             override fun eventProperty(property: String, value: Boolean) {
@@ -968,14 +982,7 @@ private fun LibmpvPlayerSurface(
             }
             override fun eventProperty(property: String, value: String) = Unit
             override fun eventProperty(property: String, value: Double) {
-                if (
-                    property == "duration" ||
-                    property == "duration/full" ||
-                    property == "time-pos" ||
-                    property == "playback-time" ||
-                    property == "percent-pos" ||
-                    property == "speed"
-                ) {
+                if (property == "duration" || property == "time-pos" || property == "speed") {
                     dispatchSnapshot()
                 }
             }
@@ -987,14 +994,18 @@ private fun LibmpvPlayerSurface(
                     MPV.mpvEvent.MPV_EVENT_START_FILE -> {
                         coroutineScope.launch(Dispatchers.Main.immediate) {
                             latestOnError.value(null)
-                            latestOnSnapshot.value(PlayerPlaybackSnapshot())
+                            val snapshot = PlayerPlaybackSnapshot()
+                            latestOnSnapshot.value(snapshot)
+                            nowPlayingController?.syncPlayback(snapshot)
                         }
                     }
                     MPV.mpvEvent.MPV_EVENT_FILE_LOADED,
                     MPV.mpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
                         coroutineScope.launch(Dispatchers.Main.immediate) {
                             latestOnError.value(null)
-                            latestOnSnapshot.value(view.snapshot())
+                            val snapshot = view.snapshot()
+                            latestOnSnapshot.value(snapshot)
+                            nowPlayingController?.syncPlayback(snapshot)
                         }
                     }
                     MPV.mpvEvent.MPV_EVENT_END_FILE -> dispatchSnapshot()
@@ -1012,15 +1023,29 @@ private fun LibmpvPlayerSurface(
         PlayerPictureInPictureManager.registerPausePlaybackCallback {
             view.setPaused(true)
         }
+        PlayerPictureInPictureManager.registerTogglePlaybackCallback {
+            val snapshot = view.snapshot()
+            if (snapshot.isPlaying) {
+                view.setPaused(true)
+            } else {
+                if (snapshot.isEnded) {
+                    view.seekToMs(0L)
+                }
+                view.setPaused(false)
+            }
+        }
         onDispose {
             PlayerPictureInPictureManager.registerPausePlaybackCallback(null)
+            PlayerPictureInPictureManager.registerTogglePlaybackCallback(null)
             view.keepScreenOn = false
         }
     }
 
     LaunchedEffect(playerViewRef, sourceUrl, sourceAudioUrl, sanitizedSourceHeaders, externalSubtitles) {
         val view = playerViewRef ?: return@LaunchedEffect
-        latestOnSnapshot.value(PlayerPlaybackSnapshot())
+        val snapshot = PlayerPlaybackSnapshot()
+        latestOnSnapshot.value(snapshot)
+        nowPlayingController?.syncPlayback(snapshot)
         view.loadSource(
             sourceUrl = sourceUrl,
             sourceAudioUrl = sourceAudioUrl,
@@ -1034,7 +1059,9 @@ private fun LibmpvPlayerSurface(
         val view = playerViewRef ?: return@LaunchedEffect
         view.setPaused(!latestPlayWhenReady.value)
         view.keepScreenOn = view.shouldKeepScreenOn()
-        latestOnSnapshot.value(view.snapshot())
+        val snapshot = view.snapshot()
+        latestOnSnapshot.value(snapshot)
+        nowPlayingController?.syncPlayback(snapshot)
     }
 
     LaunchedEffect(playerViewRef, resizeMode) {
@@ -1043,13 +1070,15 @@ private fun LibmpvPlayerSurface(
 
     LaunchedEffect(playerViewRef, sourceUrl, sourceAudioUrl, sanitizedSourceHeaders, externalSubtitles) {
         val view = playerViewRef ?: return@LaunchedEffect
-        onControllerReady(view.controller(context))
+        onControllerReady(view.controller(context, nowPlayingController))
     }
 
     LaunchedEffect(playerViewRef) {
         val view = playerViewRef ?: return@LaunchedEffect
         while (isActive) {
-            latestOnSnapshot.value(view.snapshot())
+            val snapshot = view.snapshot()
+            latestOnSnapshot.value(snapshot)
+            nowPlayingController?.syncPlayback(snapshot)
             view.keepScreenOn = view.shouldKeepScreenOn()
             delay(250L)
         }
@@ -1105,12 +1134,6 @@ private class NuvioLibmpvView(
     private var currentSourceAudioUrl: String? = null
     private var currentRequestHeaders: Map<String, String> = emptyMap()
     private var currentExternalSubtitles: List<com.nuvio.app.features.streams.StreamSubtitle> = emptyList()
-    private var lastKnownDurationMs: Long = 0L
-    private var lastKnownPositionMs: Long = 0L
-    private var surfaceReady: Boolean = false
-    private var lastSurfaceWidth: Int = 0
-    private var lastSurfaceHeight: Int = 0
-    private var pendingLoadPlayWhenReady: Boolean? = null
 
     override fun initOptions() {
         setVo(videoOutput.mpvValue)
@@ -1128,8 +1151,6 @@ private class NuvioLibmpvView(
         mpv.setPropertyBoolean("keep-open", true)
         mpv.setPropertyBoolean("input-default-bindings", true)
         mpv.setPropertyBoolean("audio-fallback-to-null", true)
-        mpv.setOptionString("resume-playback", "no").logIfMpvError("resume-playback")
-        mpv.setOptionString("save-position-on-quit", "no").logIfMpvError("save-position-on-quit")
     }
 
     override fun postInitOptions() = Unit
@@ -1143,36 +1164,12 @@ private class NuvioLibmpvView(
             "seeking" to MPV.mpvFormat.MPV_FORMAT_FLAG,
             "cache-buffering-state" to MPV.mpvFormat.MPV_FORMAT_INT64,
             "duration" to MPV.mpvFormat.MPV_FORMAT_DOUBLE,
-            "duration/full" to MPV.mpvFormat.MPV_FORMAT_DOUBLE,
             "time-pos" to MPV.mpvFormat.MPV_FORMAT_DOUBLE,
-            "playback-time" to MPV.mpvFormat.MPV_FORMAT_DOUBLE,
-            "percent-pos" to MPV.mpvFormat.MPV_FORMAT_DOUBLE,
             "demuxer-cache-time" to MPV.mpvFormat.MPV_FORMAT_DOUBLE,
             "speed" to MPV.mpvFormat.MPV_FORMAT_DOUBLE,
-            "video-params/w" to MPV.mpvFormat.MPV_FORMAT_INT64,
-            "video-params/h" to MPV.mpvFormat.MPV_FORMAT_INT64,
-            "video-out-params/w" to MPV.mpvFormat.MPV_FORMAT_INT64,
-            "video-out-params/h" to MPV.mpvFormat.MPV_FORMAT_INT64,
             "track-list" to MPV.mpvFormat.MPV_FORMAT_NODE,
         )
         props.forEach { (name, format) -> mpv.observeProperty(name, format) }
-    }
-
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        super.surfaceChanged(holder, format, width, height)
-        updateSurfaceSize(width, height)
-    }
-
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
-        surfaceReady = false
-        lastSurfaceWidth = 0
-        lastSurfaceHeight = 0
-        super.surfaceDestroyed(holder)
-    }
-
-    override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
-        super.onSizeChanged(width, height, oldWidth, oldHeight)
-        updateSurfaceSize(width, height)
     }
 
     fun loadSource(
@@ -1192,82 +1189,36 @@ private class NuvioLibmpvView(
         currentRequestHeaders = requestHeaders
         currentExternalSubtitles = externalSubtitles
         if (!sameSource) {
-            lastKnownDurationMs = 0L
-            lastKnownPositionMs = 0L
             loadCurrentSource(playWhenReady = playWhenReady)
         } else {
             applyRequestHeaders(requestHeaders)
             setPaused(!playWhenReady)
-            if (pendingLoadPlayWhenReady != null) {
-                pendingLoadPlayWhenReady = playWhenReady
-            }
         }
     }
 
     private fun loadCurrentSource(playWhenReady: Boolean) {
         val sourceUrl = currentSourceUrl ?: return
-        if (!surfaceReady) {
-            pendingLoadPlayWhenReady = playWhenReady
-            applyRequestHeaders(currentRequestHeaders)
-            setPaused(!playWhenReady)
-            return
-        }
-        val libmpvSourceUrl = sourceUrl.toLibmpvLoadPath()
         applyRequestHeaders(currentRequestHeaders)
-        syncMpvSurfaceSize()
         setPaused(!playWhenReady)
-        mpv.setOptionString("start", "0").logIfMpvError("start")
-        mpv.command("loadfile", libmpvSourceUrl, "replace")
-        pendingLoadPlayWhenReady = null
+        mpv.command("loadfile", sourceUrl, "replace")
         currentSourceAudioUrl?.takeIf { it.isNotBlank() }?.let { sourceAudioUrl ->
-            mpv.command("audio-add", sourceAudioUrl.toLibmpvLoadPath(), "auto")
+            mpv.command("audio-add", sourceAudioUrl, "auto")
         }
         currentExternalSubtitles.forEachIndexed { index, subtitle ->
             val flag = if (index == 0) "auto" else "cached"
-            mpv.command("sub-add", subtitle.url.toLibmpvLoadPath(), flag)
+            mpv.command("sub-add", subtitle.url, flag)
         }
         setPaused(!playWhenReady)
     }
 
-    private fun updateSurfaceSize(width: Int, height: Int) {
-        if (width <= 0 || height <= 0) return
-        surfaceReady = true
-        val changed = width != lastSurfaceWidth || height != lastSurfaceHeight
-        lastSurfaceWidth = width
-        lastSurfaceHeight = height
-        syncMpvSurfaceSize()
-        if (changed) {
-            requestLayout()
-            invalidate()
-            post { syncMpvSurfaceSize() }
-            postDelayed({ syncMpvSurfaceSize() }, LibmpvSurfaceResizeSettleDelayMs)
-        }
-        pendingLoadPlayWhenReady?.let(::loadCurrentSource)
-    }
-
-    private fun syncMpvSurfaceSize() {
-        val width = lastSurfaceWidth.takeIf { it > 0 } ?: width.takeIf { it > 0 } ?: return
-        val height = lastSurfaceHeight.takeIf { it > 0 } ?: height.takeIf { it > 0 } ?: return
-        mpv.setPropertyString("android-surface-size", "${width}x$height")
-    }
-
-    private fun String.toLibmpvLoadPath(): String {
-        val value = trim()
-        if (value.isBlank()) return value
-        return value.toExistingLocalFileOrNull()?.absolutePath ?: value
-    }
-
-    private fun String.toExistingLocalFileOrNull(): File? =
-        runCatching {
-            when {
-                startsWith("file:", ignoreCase = true) -> File(URI(this))
-                startsWith("/") -> File(this)
-                else -> null
-            }
-        }.getOrNull()?.takeIf { it.exists() && it.isFile }
-
     fun setPaused(paused: Boolean) {
         runCatching { mpv.setPropertyBoolean("pause", paused) }
+    }
+
+    fun seekToMs(positionMs: Long) {
+        runCatching {
+            mpv.command("seek", (positionMs.coerceAtLeast(0L) / 1000.0).toString(), "absolute")
+        }
     }
 
     fun snapshot(): PlayerPlaybackSnapshot {
@@ -1277,25 +1228,18 @@ private class NuvioLibmpvView(
         val ended = mpv.getPropertyBoolean("eof-reached") ?: false
         val seeking = mpv.getPropertyBoolean("seeking") ?: false
         val cacheBufferingState = mpv.getPropertyInt("cache-buffering-state")
-        val rawDurationMs = maxOf(
-            mpv.getPropertyDouble("duration/full").toMillis(),
-            mpv.getPropertyDouble("duration").toMillis(),
-        )
-        val percentPositionMs = mpv.getPropertyDouble("percent-pos")
-            ?.takeIf { it.isFinite() && it > 0.0 && rawDurationMs > 0L }
-            ?.let { percent -> (rawDurationMs * (percent / 100.0)).toLong() }
-            ?: 0L
-        val rawPositionMs = maxOf(
-            mpv.getPropertyDouble("time-pos").toMillis(),
-            mpv.getPropertyDouble("playback-time").toMillis(),
-            percentPositionMs,
-        )
-        val durationMs = stableDurationMs(rawDurationMs, rawPositionMs)
-        val positionMs = stablePositionMs(rawPositionMs, durationMs)
-        val cachePositionMs = positionMs + mpv.getPropertyDouble("demuxer-cache-time").toMillis()
+        val durationMs = mpv.getPropertyDouble("duration").toMillis()
+        val positionMs = mpv.getPropertyDouble("time-pos").toMillis()
+        val cachePositionMs = mpv.getPropertyDouble("demuxer-cache-time").toMillis()
         val isCacheBuffering = cacheBufferingState != null && cacheBufferingState in 0 until 100
         val isLoading = pausedForCache ||
             (!paused && !ended && (seeking || isCacheBuffering || (idle && durationMs <= 0L)))
+        val videoWidth = mpv.getPropertyInt("video-out-params/dw")
+            ?: mpv.getPropertyInt("video-params/dw")
+            ?: 0
+        val videoHeight = mpv.getPropertyInt("video-out-params/dh")
+            ?: mpv.getPropertyInt("video-params/dh")
+            ?: 0
         return PlayerPlaybackSnapshot(
             isLoading = isLoading,
             isPlaying = !paused && !isLoading && !idle && !ended,
@@ -1304,44 +1248,10 @@ private class NuvioLibmpvView(
             positionMs = positionMs,
             bufferedPositionMs = maxOf(positionMs, cachePositionMs),
             playbackSpeed = (mpv.getPropertyDouble("speed") ?: 1.0).toFloat(),
-            videoWidth = mpvVideoDimension("w"),
-            videoHeight = mpvVideoDimension("h"),
+            videoWidth = videoWidth,
+            videoHeight = videoHeight,
         )
     }
-
-    private fun stableDurationMs(candidateDurationMs: Long, candidatePositionMs: Long): Long {
-        val duration = candidateDurationMs.coerceAtLeast(0L)
-        val position = candidatePositionMs.coerceAtLeast(0L)
-        val stable = when {
-            duration <= 0L -> lastKnownDurationMs
-            lastKnownDurationMs > 0L &&
-                duration < (lastKnownDurationMs * 0.75).toLong() &&
-                position <= lastKnownDurationMs + 1_000L -> lastKnownDurationMs
-            duration + 1_000L < position -> maxOf(lastKnownDurationMs, position)
-            else -> duration
-        }
-        if (stable > 0L) {
-            lastKnownDurationMs = stable
-        }
-        return stable
-    }
-
-    private fun stablePositionMs(candidatePositionMs: Long, durationMs: Long): Long {
-        val position = candidatePositionMs.coerceAtLeast(0L)
-        val stable = when {
-            durationMs > 0L -> position.coerceIn(0L, durationMs)
-            position > 0L -> position
-            else -> lastKnownPositionMs
-        }
-        if (stable > 0L || durationMs > 0L) {
-            lastKnownPositionMs = stable
-        }
-        return stable
-    }
-
-    private fun mpvVideoDimension(axis: String): Int? =
-        (mpv.getPropertyInt("video-out-params/$axis") ?: mpv.getPropertyInt("video-params/$axis"))
-            ?.takeIf { it > 0 }
 
     fun shouldKeepScreenOn(): Boolean {
         val snapshot = snapshot()
@@ -1365,23 +1275,22 @@ private class NuvioLibmpvView(
         }
     }
 
-    fun controller(context: Context): PlayerEngineController =
+    fun seekByMs(offsetMs: Long) {
+        mpv.command("seek", (offsetMs / 1000.0).toString(), "relative")
+    }
+
+    fun controller(
+        context: Context,
+        nowPlayingController: AndroidPlayerNowPlayingController?,
+    ): PlayerEngineController =
         object : PlayerEngineController {
             override fun play() = setPaused(false)
 
             override fun pause() = setPaused(true)
 
-            override fun seekTo(positionMs: Long) {
-                val targetMs = positionMs.coerceAtLeast(0L)
-                    .let { ms -> if (lastKnownDurationMs > 0L) ms.coerceAtMost(lastKnownDurationMs) else ms }
-                lastKnownPositionMs = targetMs
-                val seconds = targetMs / 1000.0
-                mpv.command("seek", String.format(Locale.US, "%.3f", seconds), "absolute+exact")
-            }
+            override fun seekTo(positionMs: Long) = this@NuvioLibmpvView.seekToMs(positionMs)
 
-            override fun seekBy(offsetMs: Long) {
-                mpv.command("seek", (offsetMs / 1000.0).toString(), "relative")
-            }
+            override fun seekBy(offsetMs: Long) = this@NuvioLibmpvView.seekByMs(offsetMs)
 
             override fun retry() {
                 loadCurrentSource(playWhenReady = true)
@@ -1391,19 +1300,16 @@ private class NuvioLibmpvView(
                 mpv.setPropertyDouble("speed", speed.coerceIn(0.25f, 4f).toDouble())
             }
 
-            override fun setMuted(muted: Boolean) {
-                mpv.setPropertyBoolean("mute", muted)
+            override fun updateNowPlayingMetadata(info: PlayerNowPlayingInfo) {
+                nowPlayingController?.updateMetadata(info)
             }
 
-            override fun setVolumeBoost(multiplier: Float) {
-                val boost = multiplier.coerceIn(1f, 2f)
-                mpv.setPropertyDouble("volume", 100.0)
-                if (boost <= 1.001f) {
-                    mpv.setPropertyString("af", "")
-                } else {
-                    val gain = (boost * 100f).toInt().toFloat() / 100f
-                    mpv.setPropertyString("af", "lavfi=[volume=$gain]")
-                }
+            override fun clearNowPlayingInfo() {
+                nowPlayingController?.clear()
+            }
+
+            override fun setMuted(muted: Boolean) {
+                mpv.setPropertyBoolean("mute", muted)
             }
 
             override fun getAudioTracks(): List<AudioTrack> =
@@ -1469,8 +1375,6 @@ private class NuvioLibmpvView(
                 mpv.setPropertyString("sub-border-color", style.outlineColor.toMpvColor())
                 mpv.setPropertyString("sub-border-style", style.toMpvSubtitleBorderStyle())
                 mpv.setPropertyString("sub-bold", if (style.bold) "yes" else "no")
-                style.customFontDirectory()?.let { mpv.setPropertyString("sub-fonts-dir", it) }
-                mpv.setPropertyString("sub-font", style.toMpvSubtitleFont())
                 mpv.setPropertyInt("sub-font-size", style.toMpvSubtitleFontSize())
                 mpv.setPropertyInt("sub-outline-size", style.toMpvSubtitleOutlineSize())
                 mpv.setPropertyInt("sub-border-size", style.toMpvSubtitleOutlineSize())
@@ -1586,33 +1490,10 @@ private const val MPV_SUBTITLE_FONT_SIZE_SCALE = 55.0 / 18.0
 private const val MPV_SUBTITLE_FONT_SIZE_MIN = 36
 private const val MPV_SUBTITLE_FONT_SIZE_MAX = 122
 private const val MPV_SUBTITLE_OUTLINE_SIZE_SCALE = 1.5
-private const val LibmpvSurfaceResizeSettleDelayMs = 80L
 
-private fun buildAndroidLoadControl(memorySafeBufferEnabled: Boolean): DefaultLoadControl =
-    DefaultLoadControl.Builder().apply {
-        if (memorySafeBufferEnabled) {
-            setTargetBufferBytes(48 * 1024 * 1024)
-            setBufferDurationsMs(
-                10_000,
-                40_000,
-                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
-                4_000
-            )
-            setBackBuffer(0, false)
-            setPrioritizeTimeOverSizeThresholds(false)
-        } else {
-            setTargetBufferBytes(100 * 1024 * 1024)
-            setBufferDurationsMs(
-                15_000,
-                70_000,
-                DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
-                5_000
-            )
-        }
-    }.build()
-
-private fun ExoPlayer.snapshot(): PlayerPlaybackSnapshot =
-    PlayerPlaybackSnapshot(
+private fun ExoPlayer.snapshot(): PlayerPlaybackSnapshot {
+    val (videoWidth, videoHeight) = videoDimensions()
+    return PlayerPlaybackSnapshot(
         isLoading = playbackState == Player.STATE_IDLE || playbackState == Player.STATE_BUFFERING,
         isPlaying = isPlaying,
         isEnded = playbackState == Player.STATE_ENDED,
@@ -1620,9 +1501,21 @@ private fun ExoPlayer.snapshot(): PlayerPlaybackSnapshot =
         positionMs = currentPosition.coerceAtLeast(0L),
         bufferedPositionMs = bufferedPosition.coerceAtLeast(0L),
         playbackSpeed = playbackParameters.speed,
-        videoWidth = videoSize.width.takeIf { it > 0 },
-        videoHeight = videoSize.height.takeIf { it > 0 },
+        videoWidth = videoWidth,
+        videoHeight = videoHeight,
     )
+}
+
+private fun ExoPlayer.videoDimensions(): Pair<Int, Int> {
+    val format = videoFormat ?: return videoSize.width to videoSize.height
+    val hasCrop = format.decodedWidth != Format.NO_VALUE &&
+        format.decodedHeight != Format.NO_VALUE &&
+        (format.decodedWidth > format.width || format.decodedHeight > format.height)
+    val baseWidth = if (hasCrop) format.width else (format.width.takeIf { it > 0 } ?: videoSize.width)
+    val baseHeight = if (hasCrop) format.height else (format.height.takeIf { it > 0 } ?: videoSize.height)
+    val ratio = format.pixelWidthHeightRatio
+    return if (ratio != 1f) (baseWidth * ratio).roundToInt() to baseHeight else baseWidth to baseHeight
+}
 
 private fun ExoPlayer.shouldKeepPlayerScreenOn(): Boolean =
     playerError == null &&
@@ -1785,7 +1678,7 @@ private fun android.widget.FrameLayout.removeAssOverlayChildren() {
     }
 }
 
-private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState) {
+private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState, pipScale: Float = 1.0f) {
     subtitleView?.apply {
         val baseBottomPaddingFraction = SubtitleView.DEFAULT_BOTTOM_PADDING_FRACTION * 2f / 3f
         val offsetFraction = (style.bottomOffset / 1000f).coerceIn(0f, 0.2f)
@@ -1801,44 +1694,12 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState) {
                 android.graphics.Color.TRANSPARENT,
                 if (style.outlineEnabled) CaptionStyleCompat.EDGE_TYPE_OUTLINE else CaptionStyleCompat.EDGE_TYPE_NONE,
                 style.outlineColor.toArgb(),
-                style.toAndroidSubtitleTypeface(),
+                if (style.bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT,
             )
         )
-        setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, style.fontSizeSp.toFloat())
+        setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, style.fontSizeSp.toFloat() * pipScale)
     }
 }
-
-private fun SubtitleStyleState.toAndroidSubtitleTypeface(): Typeface {
-    val typefaceStyle = if (bold) Typeface.BOLD else Typeface.NORMAL
-    if (fontFamily == SubtitleFontFamily.Custom && !customFontPath.isNullOrBlank()) {
-        runCatching { Typeface.createFromFile(customFontPath) }
-            .getOrNull()
-            ?.let { return Typeface.create(it, typefaceStyle) }
-    }
-    return when (fontFamily) {
-        SubtitleFontFamily.System -> if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-        SubtitleFontFamily.SansSerif -> Typeface.create(Typeface.SANS_SERIF, typefaceStyle)
-        SubtitleFontFamily.Serif -> Typeface.create(Typeface.SERIF, typefaceStyle)
-        SubtitleFontFamily.Monospace -> Typeface.create(Typeface.MONOSPACE, typefaceStyle)
-        SubtitleFontFamily.Rounded -> Typeface.create("sans-serif-rounded", typefaceStyle)
-        SubtitleFontFamily.Custom -> if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-    }
-}
-
-private fun SubtitleStyleState.toMpvSubtitleFont(): String =
-    when (fontFamily) {
-        SubtitleFontFamily.System -> "sans-serif"
-        SubtitleFontFamily.SansSerif -> "sans-serif"
-        SubtitleFontFamily.Serif -> "serif"
-        SubtitleFontFamily.Monospace -> "monospace"
-        SubtitleFontFamily.Rounded -> "sans-serif-rounded"
-        SubtitleFontFamily.Custom -> customFontName?.takeIf { it.isNotBlank() } ?: "sans-serif"
-    }
-
-private fun SubtitleStyleState.customFontDirectory(): String? =
-    customFontPath
-        ?.takeIf { fontFamily == SubtitleFontFamily.Custom && it.isNotBlank() }
-        ?.let { File(it).parentFile?.absolutePath }
 
 private fun ExoPlayer.extractAudioTracks(context: Context): List<AudioTrack> {
     val tracks = mutableListOf<AudioTrack>()
@@ -1944,10 +1805,49 @@ private fun ExoPlayer.logCurrentTracks(context: String) {
 }
 
 @androidx.annotation.OptIn(UnstableApi::class)
+private fun PlayerView.videoBoundsFraction(aspectRatio: Float): RectF? {
+    val subtitleView = this.subtitleView ?: return null
+    val viewWidth = subtitleView.width.toFloat()
+    val viewHeight = subtitleView.height.toFloat()
+    if (viewWidth <= 0f || viewHeight <= 0f) return null
+
+    if (aspectRatio > 0f) {
+        val parentRatio = viewWidth / viewHeight
+        return if (parentRatio > aspectRatio) {
+            val fitW = viewHeight * aspectRatio
+            val leftPx = (viewWidth - fitW) / 2f
+            RectF(leftPx / viewWidth, 0f, (leftPx + fitW) / viewWidth, 1f)
+        } else {
+            val fitH = viewWidth / aspectRatio
+            val topPx = (viewHeight - fitH) / 2f
+            RectF(0f, topPx / viewHeight, 1f, (topPx + fitH) / viewHeight)
+        }
+    }
+
+    val contentFrame = getTag(androidx.media3.ui.R.id.exo_content_frame) as? AspectRatioFrameLayout
+        ?: findViewById<AspectRatioFrameLayout>(androidx.media3.ui.R.id.exo_content_frame)
+            ?.also { setTag(androidx.media3.ui.R.id.exo_content_frame, it) }
+        ?: return null
+    val frameWidth = contentFrame.width.toFloat()
+    val frameHeight = contentFrame.height.toFloat()
+    if (frameWidth <= 0f || frameHeight <= 0f) return null
+    if (frameWidth > viewWidth || frameHeight > viewHeight) return null
+    val left = contentFrame.x / viewWidth
+    val top = contentFrame.y / viewHeight
+    return RectF(
+        left,
+        top,
+        left + frameWidth / viewWidth,
+        top + frameHeight / viewHeight,
+    )
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
 private class SubtitleOffsetRenderersFactory(
     context: Context,
     private val subtitleDelayUsProvider: () -> Long,
     private val shouldNormalizeCuePositionProvider: () -> Boolean,
+    private val videoBoundsFractionProvider: () -> RectF?,
 ) : DefaultRenderersFactory(context) {
     override fun buildTextRenderers(
         context: Context,
@@ -1959,6 +1859,7 @@ private class SubtitleOffsetRenderersFactory(
         val normalizingOutput = CueNormalizingTextOutput(
             delegate = output,
             shouldNormalizeCuePositionProvider = shouldNormalizeCuePositionProvider,
+            videoBoundsFractionProvider = videoBoundsFractionProvider,
         )
         val startIndex = out.size
         super.buildTextRenderers(context, normalizingOutput, outputLooper, extensionRendererMode, out)
@@ -1974,6 +1875,7 @@ private class SubtitleOffsetRenderersFactory(
 private class CueNormalizingTextOutput(
     private val delegate: TextOutput,
     private val shouldNormalizeCuePositionProvider: () -> Boolean,
+    private val videoBoundsFractionProvider: () -> RectF?,
 ) : TextOutput {
     override fun onCues(cueGroup: CueGroup) {
         val processed = cueGroup.cues.map(::processCue)
@@ -1990,7 +1892,34 @@ private class CueNormalizingTextOutput(
         if (shouldNormalizeCuePositionProvider()) {
             processed = normalizeCuePosition(processed)
         }
+        if (processed.bitmap != null) {
+            val bounds = videoBoundsFractionProvider()
+            if (bounds != null && bounds.width() > 0f && bounds.height() > 0f) {
+                val isIdentity = bounds.left == 0f && bounds.top == 0f
+                    && bounds.width() == 1f && bounds.height() == 1f
+                if (!isIdentity) {
+                    processed = remapBitmapCueToVideoBounds(processed, bounds)
+                }
+            }
+        }
         return processed
+    }
+
+    private fun remapBitmapCueToVideoBounds(cue: Cue, bounds: RectF): Cue {
+        val builder = cue.buildUpon()
+        if (cue.position != Cue.DIMEN_UNSET) {
+            builder.setPosition(bounds.left + cue.position * bounds.width())
+        }
+        if (cue.size != Cue.DIMEN_UNSET) {
+            builder.setSize(cue.size * bounds.width())
+        }
+        if (cue.lineType == Cue.LINE_TYPE_FRACTION && cue.line != Cue.DIMEN_UNSET) {
+            builder.setLine(bounds.top + cue.line * bounds.height(), Cue.LINE_TYPE_FRACTION)
+        }
+        if (cue.bitmapHeight != Cue.DIMEN_UNSET) {
+            builder.setBitmapHeight(cue.bitmapHeight * bounds.height())
+        }
+        return builder.build()
     }
 
     private fun normalizeCuePosition(cue: Cue): Cue {

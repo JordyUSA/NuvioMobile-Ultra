@@ -14,7 +14,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.nuvio.app.core.ui.nuvioHorizontalScrollBleed
 import com.nuvio.app.core.ui.NuvioShelfSection
-import com.nuvio.app.core.ui.NuvioViewAllPillSize
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.components.HomePosterCard
 import com.nuvio.app.features.home.stableKey
@@ -30,7 +29,6 @@ fun DetailPosterRailSection(
     headerHorizontalPadding: Dp = 0.dp,
     horizontalScrollPadding: Dp = 0.dp,
     sourceLabel: String? = null,
-    onViewAllClick: (() -> Unit)? = null,
     onPosterClick: ((MetaPreview) -> Unit)? = null,
     onPosterLongClick: ((MetaPreview) -> Unit)? = null,
 ) {
@@ -45,9 +43,6 @@ fun DetailPosterRailSection(
                 horizontal = headerHorizontalPadding + horizontalScrollPadding,
             ),
             rowModifier = Modifier.nuvioHorizontalScrollBleed(horizontalScrollPadding),
-            showHeaderAccent = false,
-            onViewAllClick = onViewAllClick,
-            viewAllPillSize = NuvioViewAllPillSize.Compact,
             key = { item -> item.stableKey() },
         ) { item ->
             HomePosterCard(
