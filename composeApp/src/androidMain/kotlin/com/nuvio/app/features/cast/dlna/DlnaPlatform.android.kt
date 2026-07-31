@@ -394,8 +394,26 @@ actual object DlnaPlatform {
         val device = (_connection.value as? DlnaConnectionState.Connected)?.device
             ?: return@withContext Result.failure(IllegalStateException("No DLNA device connected"))
         runCatching {
-            soapPost(device.avTransportControlUrl, DlnaActions.setAvTransportUri(request.contentUrl, request.contentType, request.title))
+            soapPost(
+                device.avTransportControlUrl,
+                DlnaActions.setAvTransportUri(
+                    contentUrl = request.contentUrl,
+                    contentType = request.contentType,
+                    title = request.title,
+                    // AVTransport carries one out-of-band subtitle, not a selectable list the
+                    // way Chromecast's MediaTrack does, so the first track is the only one that
+                    // can be offered.
+                    subtitleUrl = request.subtitles.firstOrNull()?.url,
+                ),
+            )
             soapPost(device.avTransportControlUrl, DlnaActions.play())
+            // Seek only lands once the renderer is out of STOPPED, so it follows Play rather
+            // than preceding it. Without this, resuming a part-watched title always restarted
+            // it from the beginning on DLNA while working correctly on Chromecast.
+            if (request.startPositionMs > 0) {
+                runCatching { soapPost(device.avTransportControlUrl, DlnaActions.seek(request.startPositionMs)) }
+                    .onFailure { Log.w(TAG, "Renderer refused the resume seek", it) }
+            }
             Unit
         }
     }

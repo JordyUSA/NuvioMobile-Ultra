@@ -4,16 +4,26 @@ import android.content.Context
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.Clock
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSourceBitmapLoader
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.effect.Presentation
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultAssetLoaderFactory
+import androidx.media3.transformer.DefaultDecoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import com.nuvio.app.features.cast.model.CastVideoCodec
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -72,65 +82,107 @@ class Media3CastMediaProcessor(private val context: Context) : CastMediaProcesso
         output.parentFile?.mkdirs()
         if (output.exists()) output.delete()
 
-        suspendCancellableCoroutine { continuation ->
-            val listener = object : Transformer.Listener {
-                override fun onCompleted(composition: Composition, result: ExportResult) {
-                    transformer = null
-                    if (continuation.isActive) continuation.resume(Result.success(output))
-                }
-
-                override fun onError(
-                    composition: Composition,
-                    result: ExportResult,
-                    exception: ExportException,
-                ) {
-                    transformer = null
-                    if (continuation.isActive) continuation.resume(Result.failure(exception))
+        // Transformer reports progress only when polled, so nothing ever called onProgress and
+        // the UI sat on "Preparing, -1" — no percentage — for the whole export. Polling has to
+        // stay on the Transformer's own thread, which is this one.
+        val progressJob = launch {
+            val holder = ProgressHolder()
+            while (isActive) {
+                delay(PROGRESS_POLL_MS)
+                val instance = transformer ?: continue
+                if (instance.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE) {
+                    onProgress(holder.progress)
                 }
             }
+        }
 
-            val builder = Transformer.Builder(context).addListener(listener)
+        try {
+            suspendCancellableCoroutine { continuation ->
+                val listener = object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, result: ExportResult) {
+                        transformer = null
+                        if (continuation.isActive) continuation.resume(Result.success(output))
+                    }
 
-            // Only pin an output codec for a track the plan actually wants re-encoded.
-            // Transformer's default — leaving the MIME type unset — means "same as the input",
-            // which is what lets it transmux. Setting these unconditionally forced a full
-            // re-encode even on a REMUX plan, so a receiver that decodes the source natively
-            // (HEVC on an Ultra, say) still paid for a transcode the planner had ruled out.
-            if (plan.videoTarget != null) builder.setVideoMimeType(MimeTypes.VIDEO_H264)
-            if (plan.audioTarget != null) builder.setAudioMimeType(MimeTypes.AUDIO_AAC)
-
-            val videoEffects = buildList {
-                plan.videoTarget?.let { target ->
-                    if (target.codec == CastVideoCodec.H264) {
-                        add(Presentation.createForWidthAndHeight(
-                            target.width,
-                            target.height,
-                            Presentation.LAYOUT_SCALE_TO_FIT,
-                        ))
+                    override fun onError(
+                        composition: Composition,
+                        result: ExportResult,
+                        exception: ExportException,
+                    ) {
+                        transformer = null
+                        if (continuation.isActive) continuation.resume(Result.failure(exception))
                     }
                 }
+
+                val builder = Transformer.Builder(context).addListener(listener)
+
+                // Only pin an output codec for a track the plan actually wants re-encoded.
+                // Transformer's default — leaving the MIME type unset — means "same as the input",
+                // which is what lets it transmux. Setting these unconditionally forced a full
+                // re-encode even on a REMUX plan, so a receiver that decodes the source natively
+                // (HEVC on an Ultra, say) still paid for a transcode the planner had ruled out.
+                if (plan.videoTarget != null) builder.setVideoMimeType(MimeTypes.VIDEO_H264)
+                if (plan.audioTarget != null) builder.setAudioMimeType(MimeTypes.AUDIO_AAC)
+
+                // Transformer's default asset loader builds its own data source and has nowhere to
+                // put request headers, so an origin needing them used to fail here — and those are
+                // exactly the sources flagged unreachable by the receiver, which is what routes them
+                // through this path in the first place. Only swapped in when there are headers to
+                // carry, so the ordinary case keeps the stock loader.
+                if (headers.isNotEmpty()) {
+                    val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                        .setDefaultRequestProperties(headers)
+                        .setAllowCrossProtocolRedirects(true)
+                    builder.setAssetLoaderFactory(
+                        DefaultAssetLoaderFactory(
+                            context,
+                            DefaultDecoderFactory.Builder(context).build(),
+                            Clock.DEFAULT,
+                            DefaultMediaSourceFactory(context).setDataSourceFactory(httpDataSourceFactory),
+                            DataSourceBitmapLoader(context),
+                        ),
+                    )
+                }
+
+                val videoEffects = buildList {
+                    plan.videoTarget?.let { target ->
+                        if (target.codec == CastVideoCodec.H264) {
+                            add(Presentation.createForWidthAndHeight(
+                                target.width,
+                                target.height,
+                                Presentation.LAYOUT_SCALE_TO_FIT,
+                            ))
+                        }
+                    }
+                }
+
+                val item = EditedMediaItem.Builder(MediaItem.fromUri(sourceUrl))
+                    .setEffects(Effects(emptyList(), videoEffects))
+                    .build()
+
+                val instance = builder.build()
+                transformer = instance
+                continuation.invokeOnCancellation { runCatching { instance.cancel() } }
+
+                try {
+                    instance.start(item, output.absolutePath)
+                } catch (error: Throwable) {
+                    transformer = null
+                    if (continuation.isActive) continuation.resume(Result.failure(error))
+                }
             }
-
-            val item = EditedMediaItem.Builder(MediaItem.fromUri(sourceUrl))
-                .setEffects(Effects(emptyList(), videoEffects))
-                .build()
-
-            val instance = builder.build()
-            transformer = instance
-            continuation.invokeOnCancellation { runCatching { instance.cancel() } }
-
-            try {
-                instance.start(item, output.absolutePath)
-            } catch (error: Throwable) {
-                transformer = null
-                if (continuation.isActive) continuation.resume(Result.failure(error))
-            }
+        } finally {
+            progressJob.cancel()
         }
     }
 
     override fun cancel() {
         transformer?.let { runCatching { it.cancel() } }
         transformer = null
+    }
+
+    private companion object {
+        const val PROGRESS_POLL_MS = 500L
     }
 }
 

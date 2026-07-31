@@ -278,6 +278,49 @@ class DidlLiteTest {
         assertTrue(didl.contains("<dc:title>Tom &amp; Jerry &lt;1940&gt;</dc:title>"))
         assertFalse(didl.contains("Tom & Jerry <1940>"))
     }
+
+    @Test
+    fun `no subtitle means no subtitle elements at all`() {
+        val didl = buildDidlLite("My Movie", "http://x/y.mp4", "video/mp4")
+
+        assertFalse(didl.contains("CaptionInfo"))
+        assertFalse(didl.contains("subtitleFileUri"))
+        // Exactly one res element: the media itself.
+        assertEquals(1, Regex("<res ").findAll(didl).count())
+    }
+
+    @Test
+    fun `a subtitle is offered under every convention renderers actually read`() {
+        val didl = buildDidlLite(
+            title = "My Movie",
+            contentUrl = "http://192.168.1.10:8899/stream.mp4",
+            contentType = "video/mp4",
+            subtitleUrl = "http://192.168.1.10:8899/subs.vtt",
+        )
+
+        // Samsung reads sec:CaptionInfo/CaptionInfoEx, others pv:subtitleFileUri, others a
+        // second res entry. No single one of these works everywhere.
+        assertTrue(didl.contains("<sec:CaptionInfoEx sec:type=\"vtt\">http://192.168.1.10:8899/subs.vtt</sec:CaptionInfoEx>"))
+        assertTrue(didl.contains("<sec:CaptionInfo sec:type=\"vtt\">"))
+        assertTrue(didl.contains("<pv:subtitleFileUri>http://192.168.1.10:8899/subs.vtt</pv:subtitleFileUri>"))
+        assertTrue(didl.contains("protocolInfo=\"http-get:*:text/vtt:*\""))
+        // Both namespaces have to be declared or the document is malformed.
+        assertTrue(didl.contains("xmlns:sec=\"http://www.sec.co.kr/\""))
+        assertTrue(didl.contains("xmlns:pv=\"http://www.pv.com/pvns/\""))
+    }
+
+    @Test
+    fun `the subtitle extension is taken from the url`() {
+        val didl = buildDidlLite("M", "http://x/y.mp4", "video/mp4", subtitleUrl = "http://x/subs.srt")
+        assertTrue(didl.contains("sec:type=\"srt\""))
+    }
+
+    @Test
+    fun `a subtitle url without an extension still produces a valid document`() {
+        val didl = buildDidlLite("M", "http://x/y.mp4", "video/mp4", subtitleUrl = "http://x/subtitles")
+        assertTrue(didl.contains("sec:type=\"srt\""))
+        assertTrue(didl.contains("<pv:subtitleFileUri>http://x/subtitles</pv:subtitleFileUri>"))
+    }
 }
 
 class XmlHelperTest {

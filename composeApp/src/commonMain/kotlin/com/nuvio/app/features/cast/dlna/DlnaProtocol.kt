@@ -184,17 +184,45 @@ fun unescapeXml(value: String): String = value
 
 // --- DIDL-Lite --------------------------------------------------------------------------------
 
-/** Minimal DIDL-Lite item metadata for `SetAVTransportURI`'s `CurrentURIMetaData` argument. */
-fun buildDidlLite(title: String, contentUrl: String, contentType: String): String {
+/**
+ * Minimal DIDL-Lite item metadata for `SetAVTransportURI`'s `CurrentURIMetaData` argument.
+ *
+ * [subtitleUrl] adds an out-of-band subtitle track. There is no single way to do this that every
+ * renderer honours, so all three of the conventions in circulation are emitted together — the
+ * `sec:` attributes Samsung reads, a `<res>` entry with a subtitle `protocolInfo`, and the
+ * `pv:subtitleFileUri` some others use. A renderer that recognises none of them ignores the extra
+ * elements rather than rejecting the document, so emitting all three costs nothing.
+ */
+fun buildDidlLite(
+    title: String,
+    contentUrl: String,
+    contentType: String,
+    subtitleUrl: String? = null,
+    subtitleMimeType: String = "text/vtt",
+): String {
     val upnpClass = if (contentType.startsWith("audio/")) "object.item.audioItem" else "object.item.videoItem"
-    return "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" " +
-        "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" " +
-        "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">" +
-        "<item id=\"0\" parentID=\"-1\" restricted=\"1\">" +
-        "<dc:title>${escapeXml(title)}</dc:title>" +
-        "<upnp:class>$upnpClass</upnp:class>" +
-        "<res protocolInfo=\"http-get:*:${escapeXml(contentType)}:*\">${escapeXml(contentUrl)}</res>" +
-        "</item></DIDL-Lite>"
+    val subtitleExtension = subtitleUrl?.substringAfterLast('.', "srt")?.takeIf { it.length in 1..5 } ?: "srt"
+    return buildString {
+        append("<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" ")
+        append("xmlns:dc=\"http://purl.org/dc/elements/1.1/\" ")
+        append("xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" ")
+        append("xmlns:sec=\"http://www.sec.co.kr/\" ")
+        append("xmlns:pv=\"http://www.pv.com/pvns/\">")
+        append("<item id=\"0\" parentID=\"-1\" restricted=\"1\">")
+        append("<dc:title>${escapeXml(title)}</dc:title>")
+        append("<upnp:class>$upnpClass</upnp:class>")
+        if (subtitleUrl != null) {
+            append("<sec:CaptionInfoEx sec:type=\"$subtitleExtension\">${escapeXml(subtitleUrl)}</sec:CaptionInfoEx>")
+            append("<sec:CaptionInfo sec:type=\"$subtitleExtension\">${escapeXml(subtitleUrl)}</sec:CaptionInfo>")
+            append("<pv:subtitleFileUri>${escapeXml(subtitleUrl)}</pv:subtitleFileUri>")
+            append("<pv:subtitleFileType>$subtitleExtension</pv:subtitleFileType>")
+        }
+        append("<res protocolInfo=\"http-get:*:${escapeXml(contentType)}:*\">${escapeXml(contentUrl)}</res>")
+        if (subtitleUrl != null) {
+            append("<res protocolInfo=\"http-get:*:${escapeXml(subtitleMimeType)}:*\">${escapeXml(subtitleUrl)}</res>")
+        }
+        append("</item></DIDL-Lite>")
+    }
 }
 
 // --- SOAP -------------------------------------------------------------------------------------
@@ -251,12 +279,17 @@ fun parseSoapFault(xml: String): String? {
 
 /** Every AVTransport/RenderingControl/ConnectionManager action this app needs, pre-built. */
 object DlnaActions {
-    fun setAvTransportUri(contentUrl: String, contentType: String, title: String): DlnaSoapCall = soapCall(
+    fun setAvTransportUri(
+        contentUrl: String,
+        contentType: String,
+        title: String,
+        subtitleUrl: String? = null,
+    ): DlnaSoapCall = soapCall(
         AV_TRANSPORT_SERVICE_TYPE, "SetAVTransportURI",
         linkedMapOf(
             "InstanceID" to "0",
             "CurrentURI" to contentUrl,
-            "CurrentURIMetaData" to buildDidlLite(title, contentUrl, contentType),
+            "CurrentURIMetaData" to buildDidlLite(title, contentUrl, contentType, subtitleUrl),
         ),
     )
 

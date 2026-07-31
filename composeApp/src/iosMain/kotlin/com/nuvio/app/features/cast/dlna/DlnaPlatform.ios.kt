@@ -246,9 +246,25 @@ actual object DlnaPlatform {
         return runCatching {
             soapPost(
                 device.avTransportControlUrl,
-                DlnaActions.setAvTransportUri(request.contentUrl, request.contentType, request.title),
+                DlnaActions.setAvTransportUri(
+                    contentUrl = request.contentUrl,
+                    contentType = request.contentType,
+                    title = request.title,
+                    // AVTransport carries one out-of-band subtitle, not a selectable list the
+                    // way Chromecast's MediaTrack does, so the first track is the only one that
+                    // can be offered.
+                    subtitleUrl = request.subtitles.firstOrNull()?.url,
+                ),
             ).getOrThrow()
             soapPost(device.avTransportControlUrl, DlnaActions.play()).getOrThrow()
+            // Seek only lands once the renderer is out of STOPPED, so it follows Play rather
+            // than preceding it. Without this, resuming a part-watched title always restarted
+            // it from the beginning on DLNA while working correctly on Chromecast. A renderer
+            // that refuses the seek still plays, so this does not fail the load.
+            if (request.startPositionMs > 0) {
+                soapPost(device.avTransportControlUrl, DlnaActions.seek(request.startPositionMs))
+            }
+            Unit
         }
     }
 

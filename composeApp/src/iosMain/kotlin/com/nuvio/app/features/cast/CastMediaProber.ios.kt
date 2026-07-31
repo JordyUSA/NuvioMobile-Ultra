@@ -38,13 +38,19 @@ actual suspend fun probeCastMedia(
     // Adaptive manifests have no single set of codecs to read, and a receiver negotiates its
     // own variant, so probing them is both impossible here and unnecessary — same short-circuit
     // as the Android probe.
+    //
+    // Liveness is left unasserted rather than hardcoded true. Android reads the manifest to
+    // decide (see hlsPlaylistIsLive/dashManifestIsLive, which live in commonMain ready for use
+    // here); iOS does not fetch it because nothing on this platform consumes the flag yet —
+    // DLNA's AVTransport has no equivalent of Cast's stream type, and CastPlatform is a stub.
+    // Claiming live was the worse of the two guesses: it is what strips a receiver's scrubber.
     if (container == CastContainer.HLS || container == CastContainer.DASH) {
         return Result.success(
             CastMediaProbe(
                 container = container,
                 video = null,
                 audioTracks = emptyList(),
-                isLive = true,
+                isLive = false,
             ),
         )
     }

@@ -12,6 +12,8 @@ import com.nuvio.app.features.cast.model.CastVideoCodec
 import com.nuvio.app.features.cast.model.CastVideoStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
  * Probes with [MediaExtractor], which reads only enough of the container to parse its track
@@ -24,14 +26,16 @@ actual suspend fun probeCastMedia(
     val container = containerFromUrl(url)
 
     // Adaptive manifests have no single set of codecs to read, and a receiver negotiates its
-    // own variant, so probing them is both impossible here and unnecessary.
+    // own variant, so probing them for codecs is both impossible here and unnecessary. Liveness
+    // still has to be established: it used to be hardcoded true, which handed every VOD stream
+    // to the receiver as STREAM_TYPE_LIVE and left it with no scrubber at all.
     if (container == CastContainer.HLS || container == CastContainer.DASH) {
         return@withContext Result.success(
             CastMediaProbe(
                 container = container,
                 video = null,
                 audioTracks = emptyList(),
-                isLive = true,
+                isLive = adaptiveStreamIsLive(url, container, headers),
             ),
         )
     }
@@ -151,3 +155,49 @@ private fun MediaFormat.optLong(key: String): Long? =
 
 private fun MediaFormat.optString(key: String): String? =
     if (containsKey(key)) runCatching { getString(key) }.getOrNull() else null
+
+/**
+ * Decides whether an adaptive manifest is live by reading it.
+ *
+ * A master playlist carries no liveness information of its own, so its first variant is followed
+ * once. Anything that fails — an unreachable manifest, a timeout — falls back to "not live",
+ * which is the safer error: a live stream mislabelled VOD still plays and merely shows an
+ * optimistic timeline, whereas VOD mislabelled live loses seeking altogether.
+ */
+private fun adaptiveStreamIsLive(
+    url: String,
+    container: CastContainer,
+    headers: Map<String, String>,
+): Boolean = runCatching {
+    val manifest = fetchText(url, headers) ?: return@runCatching false
+    if (container == CastContainer.DASH) return@runCatching dashManifestIsLive(manifest)
+
+    if (!hlsIsMasterPlaylist(manifest)) return@runCatching hlsPlaylistIsLive(manifest)
+    val variantUrl = hlsFirstVariantUrl(manifest, url) ?: return@runCatching false
+    val variant = fetchText(variantUrl, headers) ?: return@runCatching false
+    hlsPlaylistIsLive(variant)
+}.getOrDefault(false)
+
+private fun fetchText(url: String, headers: Map<String, String>): String? = runCatching {
+    val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = MANIFEST_TIMEOUT_MS
+        readTimeout = MANIFEST_TIMEOUT_MS
+        instanceFollowRedirects = true
+        headers.forEach { (key, value) -> setRequestProperty(key, value) }
+    }
+    try {
+        if (connection.responseCode !in 200..299) return@runCatching null
+        // A manifest is a few kilobytes; a live playlist that never ends must not be read whole.
+        connection.inputStream.bufferedReader().use { reader ->
+            val buffer = CharArray(MANIFEST_MAX_CHARS)
+            val read = reader.read(buffer)
+            if (read <= 0) null else String(buffer, 0, read)
+        }
+    } finally {
+        connection.disconnect()
+    }
+}.getOrNull()
+
+private const val MANIFEST_TIMEOUT_MS = 5_000
+private const val MANIFEST_MAX_CHARS = 64 * 1024
