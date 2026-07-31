@@ -112,10 +112,13 @@ actual object CastPlatform {
             val selector = routeSelector ?: return@runOnMain
             if (discoveryActive) return@runOnMain
             discoveryActive = true
+            // Active scan, not CALLBACK_FLAG_REQUEST_DISCOVERY: passive discovery is slower to
+            // populate and misses receivers that are already idle. It costs more radio, which is
+            // acceptable because discovery is scoped to the picker dialog being on screen.
             router.addCallback(
                 selector,
                 routeCallback,
-                MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY,
+                MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN,
             )
             publishRoutes()
         }

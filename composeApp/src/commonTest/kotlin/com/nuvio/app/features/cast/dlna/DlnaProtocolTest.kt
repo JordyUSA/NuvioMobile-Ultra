@@ -65,6 +65,85 @@ class SsdpTest {
         val raw = "HTTP/1.1 200 OK\r\nUSN: uuid:1234\r\n\r\n"
         assertNull(parseSsdpResponse(raw))
     }
+
+    @Test
+    fun `the search target is carried through when the device echoes it`() {
+        val raw = "HTTP/1.1 200 OK\r\n" +
+            "LOCATION: http://192.168.1.50/desc.xml\r\n" +
+            "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n\r\n"
+
+        assertEquals(DLNA_MEDIA_RENDERER_SEARCH_TARGET, assertNotNull(parseSsdpResponse(raw)).searchTarget)
+    }
+
+    @Test
+    fun `every round searches both the renderer type and ssdp all`() {
+        // MediaRenderer:1 alone misses TVs that only answer ssdp:all.
+        assertTrue(DLNA_MEDIA_RENDERER_SEARCH_TARGET in DLNA_SEARCH_TARGETS)
+        assertTrue(SSDP_ALL_SEARCH_TARGET in DLNA_SEARCH_TARGETS)
+    }
+
+    @Test
+    fun `the search target is what ends up in the request`() {
+        assertTrue(buildSsdpSearchRequest(SSDP_ALL_SEARCH_TARGET).contains("ST: ssdp:all\r\n"))
+    }
+}
+
+class SsdpNotifyTest {
+
+    @Test
+    fun `an alive announcement carries the location to resolve`() {
+        val raw = "NOTIFY * HTTP/1.1\r\n" +
+            "HOST: 239.255.255.250:1900\r\n" +
+            "NTS: ssdp:alive\r\n" +
+            "USN: uuid:1234::urn:schemas-upnp-org:device:MediaRenderer:1\r\n" +
+            "LOCATION: http://192.168.1.50:8080/desc.xml\r\n\r\n"
+
+        val notification = assertNotNull(parseSsdpNotify(raw))
+
+        assertTrue(notification.isAlive)
+        assertEquals("http://192.168.1.50:8080/desc.xml", notification.location)
+        assertEquals("uuid:1234::urn:schemas-upnp-org:device:MediaRenderer:1", notification.usn)
+    }
+
+    @Test
+    fun `a byebye announcement is a departure and carries no location`() {
+        val raw = "NOTIFY * HTTP/1.1\r\n" +
+            "NTS: ssdp:byebye\r\n" +
+            "USN: uuid:1234::upnp:rootdevice\r\n\r\n"
+
+        val notification = assertNotNull(parseSsdpNotify(raw))
+
+        assertFalse(notification.isAlive)
+        assertNull(notification.location)
+    }
+
+    @Test
+    fun `an update is treated as still-alive, not a departure`() {
+        val raw = "NOTIFY * HTTP/1.1\r\n" +
+            "NTS: ssdp:update\r\n" +
+            "USN: uuid:1234\r\n" +
+            "LOCATION: http://192.168.1.50/desc.xml\r\n\r\n"
+
+        assertTrue(assertNotNull(parseSsdpNotify(raw)).isAlive)
+    }
+
+    @Test
+    fun `an alive announcement without a location cannot be acted on`() {
+        val raw = "NOTIFY * HTTP/1.1\r\nNTS: ssdp:alive\r\nUSN: uuid:1234\r\n\r\n"
+        assertNull(parseSsdpNotify(raw))
+    }
+
+    @Test
+    fun `a search response is not mistaken for an announcement`() {
+        val raw = "HTTP/1.1 200 OK\r\nLOCATION: http://192.168.1.50/desc.xml\r\nUSN: uuid:1234\r\n\r\n"
+        assertNull(parseSsdpNotify(raw))
+    }
+
+    @Test
+    fun `an announcement with an unrecognised NTS is ignored`() {
+        val raw = "NOTIFY * HTTP/1.1\r\nNTS: ssdp:something-else\r\nUSN: uuid:1234\r\n\r\n"
+        assertNull(parseSsdpNotify(raw))
+    }
 }
 
 class DeviceDescriptionTest {

@@ -58,9 +58,19 @@ actual object DlnaPlatform {
     private val _playback = MutableStateFlow<CastPlaybackState?>(null)
     actual val playback: StateFlow<CastPlaybackState?> = _playback.asStateFlow()
 
-    private val devicesByUsn = mutableMapOf<String, DlnaDevice>()
-    private val lastSeenByUsn = mutableMapOf<String, Long>()
-    private val resolvingUsns = mutableSetOf<String>()
+    // Keyed by device-description URL rather than USN: an `ssdp:all` search makes a device answer
+    // once per service it hosts, so the same renderer arrives under several USNs pointing at one
+    // location, and resolving each of them separately would fetch the same description repeatedly.
+    private val devicesByLocation = mutableMapOf<String, DlnaDevice>()
+    private val lastSeenByLocation = mutableMapOf<String, Long>()
+    private val resolvingLocations = mutableSetOf<String>()
+
+    /** Locations already checked and found not to be renderers, so they aren't re-fetched every round. */
+    private val rejectedLocations = mutableMapOf<String, Long>()
+
+    /** `ssdp:byebye` carries no LOCATION, so departures can only be matched through the USN. */
+    private val locationByUsn = mutableMapOf<String, String>()
+
     private val pendingHttp = mutableMapOf<String, (Result<String>) -> Unit>()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -87,33 +97,68 @@ actual object DlnaPlatform {
     /** Called from Swift for every SSDP search-response datagram received. */
     fun onSsdpResponse(raw: String) {
         val ssdp = parseSsdpResponse(raw) ?: return
-        lastSeenByUsn[ssdp.usn] = currentTimeMs()
-        if (devicesByUsn.containsKey(ssdp.usn) || !resolvingUsns.add(ssdp.usn)) return
-        scope.launch {
-            val device = runCatching { resolveDevice(ssdp) }.getOrNull()
-            resolvingUsns.remove(ssdp.usn)
-            if (device != null) {
-                devicesByUsn[ssdp.usn] = device
-                _devices.value = devicesByUsn.values.toList()
-            }
+        noteAlive(usn = ssdp.usn, location = ssdp.location)
+    }
+
+    /** Called from Swift for every unsolicited SSDP `NOTIFY` announcement received. */
+    fun onSsdpNotify(raw: String) {
+        val notification = parseSsdpNotify(raw) ?: return
+        if (notification.isAlive) {
+            notification.location?.let { noteAlive(usn = notification.usn, location = it) }
+            return
+        }
+        val location = locationByUsn.remove(notification.usn) ?: return
+        lastSeenByLocation.remove(location)
+        if (devicesByLocation.remove(location) != null) {
+            _devices.value = devicesByLocation.values.toList()
         }
     }
 
     /** Called from Swift once a search window closes, so devices that stopped answering expire. */
     fun onSearchCycleCompleted() {
-        val cutoff = currentTimeMs() - DEVICE_TTL_MS
-        val stale = lastSeenByUsn.filterValues { it < cutoff }.keys.toList()
-        if (stale.isEmpty()) return
-        stale.forEach { usn ->
-            lastSeenByUsn.remove(usn)
-            devicesByUsn.remove(usn)
+        val now = currentTimeMs()
+        val cutoff = now - DEVICE_TTL_MS
+        val stale = lastSeenByLocation.filterValues { it < cutoff }.keys.toList()
+        stale.forEach { location ->
+            lastSeenByLocation.remove(location)
+            devicesByLocation.remove(location)
         }
-        _devices.value = devicesByUsn.values.toList()
+        rejectedLocations.entries.removeAll { now - it.value >= REJECTED_TTL_MS }
+        locationByUsn.entries.removeAll { it.value !in lastSeenByLocation }
+        if (stale.isNotEmpty()) _devices.value = devicesByLocation.values.toList()
     }
 
-    private suspend fun resolveDevice(ssdp: SsdpResponse): DlnaDevice? {
-        val xml = httpGet(ssdp.location).getOrNull() ?: return null
-        val description = parseDeviceDescription(xml, ssdp.location) ?: return null
+    /**
+     * Records that whatever lives at [location] is still on the network, and resolves it the
+     * first time it is seen.
+     */
+    private fun noteAlive(usn: String, location: String) {
+        val now = currentTimeMs()
+        locationByUsn[usn] = location
+        lastSeenByLocation[location] = now
+        if (devicesByLocation.containsKey(location)) return
+        rejectedLocations[location]?.let { if (now - it < REJECTED_TTL_MS) return }
+        if (!resolvingLocations.add(location)) return
+
+        scope.launch {
+            val device = runCatching { resolveDevice(location) }.getOrNull()
+            resolvingLocations.remove(location)
+            if (device != null) {
+                devicesByLocation[location] = device
+                rejectedLocations.remove(location)
+                _devices.value = devicesByLocation.values.toList()
+            } else {
+                // `ssdp:all` pulls in every UPnP device on the network. Remembering the ones that
+                // turned out not to be renderers keeps the next round from re-fetching all of
+                // their descriptions again.
+                rejectedLocations[location] = currentTimeMs()
+            }
+        }
+    }
+
+    private suspend fun resolveDevice(location: String): DlnaDevice? {
+        val xml = httpGet(location).getOrNull() ?: return null
+        val description = parseDeviceDescription(xml, location) ?: return null
         val avTransport = description.service(AV_TRANSPORT_SERVICE_TYPE) ?: return null
         val renderingControl = description.service(RENDERING_CONTROL_SERVICE_TYPE)?.controlUrl
         val connectionManagerUrl = description.service(CONNECTION_MANAGER_SERVICE_TYPE)?.controlUrl
@@ -127,7 +172,7 @@ actual object DlnaPlatform {
             id = description.udn,
             name = description.friendlyName,
             modelName = description.modelName,
-            location = ssdp.location,
+            location = location,
             avTransportControlUrl = avTransport.controlUrl,
             renderingControlControlUrl = renderingControl,
             capabilities = capabilitiesFromProtocolInfo(sink),
@@ -284,5 +329,9 @@ actual object DlnaPlatform {
     private fun currentTimeMs(): Long = (NSDate().timeIntervalSince1970 * 1000).toLong()
 
     private const val DEVICE_TTL_MS = 30_000L
+
+    /** Re-checked occasionally: a device can gain an AVTransport service across a firmware update. */
+    private const val REJECTED_TTL_MS = 300_000L
+
     private const val POLL_INTERVAL_MS = 2_000L
 }

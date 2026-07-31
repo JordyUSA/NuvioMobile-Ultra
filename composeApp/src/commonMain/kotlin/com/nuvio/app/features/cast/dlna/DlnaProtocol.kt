@@ -19,8 +19,23 @@ import com.nuvio.app.features.cast.model.capabilitiesFor
  */
 
 const val DLNA_MEDIA_RENDERER_SEARCH_TARGET = "urn:schemas-upnp-org:device:MediaRenderer:1"
+const val SSDP_ALL_SEARCH_TARGET = "ssdp:all"
 const val DLNA_MULTICAST_ADDRESS = "239.255.255.250"
 const val DLNA_MULTICAST_PORT = 1900
+
+/**
+ * The search targets sent on every discovery round.
+ *
+ * `MediaRenderer:1` alone is not enough in practice. A compliant device answers a search for
+ * its own type, and one advertising `MediaRenderer:2`/`:3` is supposed to answer a `:1` search
+ * too, but plenty of real televisions only reply reliably to `ssdp:all`. Sending both costs one
+ * extra datagram and is the difference between a TV appearing and not.
+ *
+ * `ssdp:all` makes every UPnP device on the network answer — routers, printers, NAS boxes — so
+ * whatever consumes these responses has to expect mostly non-renderers and cache the rejections
+ * rather than re-fetching each one's description every round.
+ */
+val DLNA_SEARCH_TARGETS = listOf(DLNA_MEDIA_RENDERER_SEARCH_TARGET, SSDP_ALL_SEARCH_TARGET)
 
 const val AV_TRANSPORT_SERVICE_TYPE = "urn:schemas-upnp-org:service:AVTransport:1"
 const val RENDERING_CONTROL_SERVICE_TYPE = "urn:schemas-upnp-org:service:RenderingControl:1"
@@ -29,15 +44,27 @@ const val CONNECTION_MANAGER_SERVICE_TYPE = "urn:schemas-upnp-org:service:Connec
 // --- Discovery ---------------------------------------------------------------------------
 
 /** An SSDP M-SEARCH response's `LOCATION` (device description URL) and `USN` (unique id). */
-data class SsdpResponse(val location: String, val usn: String)
+data class SsdpResponse(val location: String, val usn: String, val searchTarget: String? = null)
+
+/**
+ * An unsolicited `NOTIFY * HTTP/1.1` announcement, multicast by a device when it joins the
+ * network (`ssdp:alive`) or leaves it cleanly (`ssdp:byebye`).
+ *
+ * [location] is only present on alive/update announcements; byebye carries just the [usn], so
+ * the listener has to remember which location that USN was last seen at to act on it.
+ */
+data class SsdpNotification(val usn: String, val location: String?, val isAlive: Boolean)
 
 /** An `M-SEARCH * HTTP/1.1` request body, sent as a UDP datagram to [DLNA_MULTICAST_ADDRESS]. */
-fun buildSsdpSearchRequest(mx: Int = 3): String =
+fun buildSsdpSearchRequest(
+    searchTarget: String = DLNA_MEDIA_RENDERER_SEARCH_TARGET,
+    mx: Int = 3,
+): String =
     "M-SEARCH * HTTP/1.1\r\n" +
         "HOST: $DLNA_MULTICAST_ADDRESS:$DLNA_MULTICAST_PORT\r\n" +
         "MAN: \"ssdp:discover\"\r\n" +
         "MX: $mx\r\n" +
-        "ST: $DLNA_MEDIA_RENDERER_SEARCH_TARGET\r\n" +
+        "ST: $searchTarget\r\n" +
         "\r\n"
 
 /** Parses a raw SSDP search-response datagram. Null when it isn't a usable renderer response. */
@@ -46,7 +73,30 @@ fun parseSsdpResponse(raw: String): SsdpResponse? {
     val headers = parseHttpHeaders(raw)
     val location = headers["location"] ?: return null
     val usn = headers["usn"] ?: location
-    return SsdpResponse(location = location, usn = usn)
+    return SsdpResponse(location = location, usn = usn, searchTarget = headers["st"])
+}
+
+/**
+ * Parses an unsolicited SSDP `NOTIFY` announcement. Null when it isn't one, or when it carries
+ * too little to act on.
+ *
+ * Without this, a television only becomes visible on the next active search round — switching
+ * one on while the picker is already open would otherwise leave it missing for a full search
+ * interval, or indefinitely if its M-SEARCH replies keep getting dropped.
+ */
+fun parseSsdpNotify(raw: String): SsdpNotification? {
+    if (!raw.startsWith("NOTIFY", ignoreCase = true)) return null
+    val headers = parseHttpHeaders(raw)
+    val usn = headers["usn"] ?: return null
+    val isAlive = when (headers["nts"]?.trim()?.lowercase()) {
+        // ssdp:update is a device changing its advertisement (a new boot id), not a departure.
+        "ssdp:alive", "ssdp:update" -> true
+        "ssdp:byebye" -> false
+        else -> return null
+    }
+    val location = headers["location"]?.takeIf { it.isNotBlank() }
+    if (isAlive && location == null) return null
+    return SsdpNotification(usn = usn, location = location, isAlive = isAlive)
 }
 
 private fun parseHttpHeaders(raw: String): Map<String, String> =
