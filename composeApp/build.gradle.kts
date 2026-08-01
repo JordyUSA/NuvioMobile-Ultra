@@ -295,6 +295,24 @@ val androidDistributionSourceDir = if (androidDistribution == "full") {
 } else {
     "src/androidPlaystore/kotlin"
 }
+
+// Bundling FFmpeg is opt-in because it requires an AAR that is not in the repository:
+// FFmpegKit was retired and its Maven artifacts withdrawn, so the binary is produced by the
+// build-ffmpeg-kit workflow and dropped into composeApp/libs. Without it the cast pipeline
+// falls back to Media3 Transformer, which handles the common cases but cannot decode formats
+// the handset's own MediaCodec rejects.
+val bundleFfmpeg = (
+    providers.gradleProperty("nuvio.android.ffmpeg").orNull
+        ?: System.getenv("NUVIO_ANDROID_FFMPEG")
+        ?: "false"
+    ).trim().equals("true", ignoreCase = true)
+val ffmpegSourceDir = if (bundleFfmpeg) "src/androidFfmpeg/kotlin" else "src/androidNoFfmpeg/kotlin"
+val ffmpegKitAar = project.file("libs").listFiles()
+    ?.firstOrNull { it.name.startsWith("lib-ffmpeg-kit") && it.extension == "aar" }
+require(!bundleFfmpeg || ffmpegKitAar != null) {
+    "nuvio.android.ffmpeg=true but no lib-ffmpeg-kit-*.aar found in composeApp/libs. " +
+        "Run the \"Build FFmpegKit AAR\" workflow and copy its artifact there."
+}
 val runtimeLocalProperties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) {
@@ -410,6 +428,7 @@ kotlin {
                 if (iosDistribution == "full" && nuvioEngineSliceDirectory.resolve("libCNuvioEngine.a").isFile) {
                     create("nuvioengine") {
                         defFile(project.file("src/nativeInterop/cinterop/nuvioengine.def"))
+                        packageName("com.nuvio.app.features.p2p.native")
                         compilerOpts("-I${nuvioEngineSliceDirectory.resolve("Headers").absolutePath}")
                         extraOpts("-libraryPath", nuvioEngineSliceDirectory.absolutePath)
                     }
@@ -454,6 +473,8 @@ kotlin {
         }
         androidMain {
             kotlin.srcDir(project.file(androidDistributionSourceDir))
+            // Either the real FFmpeg processor or the no-op that falls back to Media3.
+            kotlin.srcDir(project.file(ffmpegSourceDir))
             if (androidDistribution == "full") {
                 kotlin.srcDir(fullCommonSourceDir)
             }
@@ -484,6 +505,12 @@ kotlin {
                 implementation(libs.androidx.media3.container)
                 implementation(libs.androidx.media3.extractor)
                 implementation(libs.mpv.android.lib)
+                // Chromecast: the Cast SDK itself, MediaRouter for receiver discovery, and
+                // Transformer/Effect for the remux and transcode paths.
+                implementation(libs.play.services.cast.framework)
+                implementation(libs.androidx.mediarouter)
+                implementation(libs.androidx.media3.transformer)
+                implementation(libs.androidx.media3.effect)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
                 implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("lib-*.aar"))))
                 if (androidDistribution == "full") {

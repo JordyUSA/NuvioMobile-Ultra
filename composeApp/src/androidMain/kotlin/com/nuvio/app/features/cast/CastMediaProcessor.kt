@@ -1,0 +1,230 @@
+package com.nuvio.app.features.cast
+
+import android.content.Context
+import androidx.annotation.OptIn
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.Clock
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSourceBitmapLoader
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.effect.Presentation
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultAssetLoaderFactory
+import androidx.media3.transformer.DefaultDecoderFactory
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.Effects
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.ProgressHolder
+import androidx.media3.transformer.Transformer
+import com.nuvio.app.features.cast.model.CastVideoCodec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import java.io.File
+import kotlin.coroutines.resume
+
+/**
+ * Turns a source the receiver cannot play into one it can.
+ *
+ * Deliberately an interface: the Media3 implementation below covers the common cases with
+ * hardware encoders and no added binary weight, but it inherits MediaCodec's limits — it can
+ * only decode what the handset itself decodes, so exotic audio such as DTS-HD or TrueHD will
+ * fail here. Swapping in an FFmpeg-backed implementation is the way to close that gap without
+ * touching the planner, the server or the UI.
+ */
+interface CastMediaProcessor {
+
+    /**
+     * Produces a receiver-playable file at [output].
+     *
+     * [onProgress] reports 0..100 and is advisory; Media3 cannot always estimate progress.
+     */
+    suspend fun process(
+        sourceUrl: String,
+        plan: CastDeliveryPlan,
+        output: File,
+        /** Source duration, used to turn encoder progress into a percentage. */
+        durationMs: Long?,
+        headers: Map<String, String> = emptyMap(),
+        onProgress: (Int) -> Unit = {},
+    ): Result<File>
+
+    /** Aborts an in-flight export. */
+    fun cancel()
+}
+
+/**
+ * Hardware-accelerated implementation built on Media3 Transformer.
+ *
+ * Transformer transmuxes rather than re-encodes whenever the requested output format already
+ * matches the input, so the remux path costs roughly a file copy. Encoding, when required,
+ * goes through MediaCodec and therefore uses the device's hardware encoder.
+ */
+@OptIn(UnstableApi::class)
+class Media3CastMediaProcessor(private val context: Context) : CastMediaProcessor {
+
+    private var transformer: Transformer? = null
+
+    override suspend fun process(
+        sourceUrl: String,
+        plan: CastDeliveryPlan,
+        output: File,
+        durationMs: Long?,
+        headers: Map<String, String>,
+        onProgress: (Int) -> Unit,
+    ): Result<File> = withContext(Dispatchers.Main) {
+        output.parentFile?.mkdirs()
+        if (output.exists()) output.delete()
+
+        // Transformer reports progress only when polled, so nothing ever called onProgress and
+        // the UI sat on "Preparing, -1" — no percentage — for the whole export. Polling has to
+        // stay on the Transformer's own thread, which is this one.
+        val progressJob = launch {
+            val holder = ProgressHolder()
+            while (isActive) {
+                delay(PROGRESS_POLL_MS)
+                val instance = transformer ?: continue
+                if (instance.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE) {
+                    onProgress(holder.progress)
+                }
+            }
+        }
+
+        try {
+            suspendCancellableCoroutine { continuation ->
+                val listener = object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, result: ExportResult) {
+                        transformer = null
+                        if (continuation.isActive) continuation.resume(Result.success(output))
+                    }
+
+                    override fun onError(
+                        composition: Composition,
+                        result: ExportResult,
+                        exception: ExportException,
+                    ) {
+                        transformer = null
+                        if (continuation.isActive) continuation.resume(Result.failure(exception))
+                    }
+                }
+
+                val builder = Transformer.Builder(context).addListener(listener)
+
+                // Only pin an output codec for a track the plan actually wants re-encoded.
+                // Transformer's default — leaving the MIME type unset — means "same as the input",
+                // which is what lets it transmux. Setting these unconditionally forced a full
+                // re-encode even on a REMUX plan, so a receiver that decodes the source natively
+                // (HEVC on an Ultra, say) still paid for a transcode the planner had ruled out.
+                if (plan.videoTarget != null) builder.setVideoMimeType(MimeTypes.VIDEO_H264)
+                if (plan.audioTarget != null) builder.setAudioMimeType(MimeTypes.AUDIO_AAC)
+
+                // Transformer's default asset loader builds its own data source and has nowhere to
+                // put request headers, so an origin needing them used to fail here — and those are
+                // exactly the sources flagged unreachable by the receiver, which is what routes them
+                // through this path in the first place. Only swapped in when there are headers to
+                // carry, so the ordinary case keeps the stock loader.
+                if (headers.isNotEmpty()) {
+                    val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                        .setDefaultRequestProperties(headers)
+                        .setAllowCrossProtocolRedirects(true)
+                    builder.setAssetLoaderFactory(
+                        DefaultAssetLoaderFactory(
+                            context,
+                            DefaultDecoderFactory.Builder(context).build(),
+                            Clock.DEFAULT,
+                            DefaultMediaSourceFactory(context).setDataSourceFactory(httpDataSourceFactory),
+                            DataSourceBitmapLoader(context),
+                        ),
+                    )
+                }
+
+                val videoEffects = buildList {
+                    plan.videoTarget?.let { target ->
+                        if (target.codec == CastVideoCodec.H264) {
+                            add(Presentation.createForWidthAndHeight(
+                                target.width,
+                                target.height,
+                                Presentation.LAYOUT_SCALE_TO_FIT,
+                            ))
+                        }
+                    }
+                }
+
+                val item = EditedMediaItem.Builder(MediaItem.fromUri(sourceUrl))
+                    .setEffects(Effects(emptyList(), videoEffects))
+                    .build()
+
+                val instance = builder.build()
+                transformer = instance
+                continuation.invokeOnCancellation { runCatching { instance.cancel() } }
+
+                try {
+                    instance.start(item, output.absolutePath)
+                } catch (error: Throwable) {
+                    transformer = null
+                    if (continuation.isActive) continuation.resume(Result.failure(error))
+                }
+            }
+        } finally {
+            progressJob.cancel()
+        }
+    }
+
+    override fun cancel() {
+        transformer?.let { runCatching { it.cancel() } }
+        transformer = null
+    }
+
+    private companion object {
+        const val PROGRESS_POLL_MS = 500L
+    }
+}
+
+/**
+ * Chooses the processor for this build.
+ *
+ * FFmpeg leads when it is bundled, because it decodes formats MediaCodec refuses. Media3
+ * remains behind it as a fallback: `h264_mediacodec` is not available on every handset, and
+ * when it is missing the Transformer path still handles the ordinary cases.
+ */
+fun castMediaProcessor(context: Context): CastMediaProcessor {
+    val media3 = Media3CastMediaProcessor(context)
+    val ffmpeg = createFFmpegCastProcessor(context) ?: return media3
+    return FallbackCastMediaProcessor(primary = ffmpeg, secondary = media3)
+}
+
+/** Runs [secondary] if [primary] fails, so one unsupported encoder does not sink the cast. */
+private class FallbackCastMediaProcessor(
+    private val primary: CastMediaProcessor,
+    private val secondary: CastMediaProcessor,
+) : CastMediaProcessor {
+
+    private var active: CastMediaProcessor = primary
+
+    override suspend fun process(
+        sourceUrl: String,
+        plan: CastDeliveryPlan,
+        output: File,
+        durationMs: Long?,
+        headers: Map<String, String>,
+        onProgress: (Int) -> Unit,
+    ): Result<File> {
+        active = primary
+        val first = primary.process(sourceUrl, plan, output, durationMs, headers, onProgress)
+        if (first.isSuccess) return first
+
+        android.util.Log.w("CastProcessor", "Primary processor failed, retrying", first.exceptionOrNull())
+        active = secondary
+        return secondary.process(sourceUrl, plan, output, durationMs, headers, onProgress)
+    }
+
+    override fun cancel() {
+        active.cancel()
+    }
+}

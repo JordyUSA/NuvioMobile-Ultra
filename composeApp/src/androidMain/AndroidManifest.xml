@@ -1,4 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Chromecast discovery is mDNS over the local network, and the local media server has
+         to advertise the Wi-Fi address rather than loopback. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <application>
+        <!-- Required by the Cast SDK: CastContext.getSharedInstance() resolves this provider
+             by name. Without the entry the SDK throws on first use, which is why adding the
+             Cast dependency on its own previously had no effect. -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="com.nuvio.app.features.cast.CastOptionsProvider" />
+    </application>
 </manifest>

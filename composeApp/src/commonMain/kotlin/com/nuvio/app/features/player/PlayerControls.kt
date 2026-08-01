@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Lock
@@ -110,6 +111,7 @@ internal fun PlayerControlsShell(
     onEpisodesClick: (() -> Unit)? = null,
     onRandomEpisodeClick: (() -> Unit)? = null,
     onOpenInExternalPlayer: (() -> Unit)? = null,
+    onCastClick: (() -> Unit)? = null,
     onSubmitIntroClick: (() -> Unit)? = null,
     parentalWarnings: List<ParentalWarning> = emptyList(),
     showParentalGuide: Boolean = false,
@@ -188,6 +190,7 @@ internal fun PlayerControlsShell(
                     onVideoSettingsClick = onVideoSettingsClick,
                     onRandomEpisodeClick = onRandomEpisodeClick,
                     onOpenInExternalPlayer = onOpenInExternalPlayer,
+                    onCastClick = onCastClick,
                     onBack = onBack,
                     modifier = Modifier
                         .align(Alignment.TopStart)
@@ -487,6 +490,7 @@ private fun PlayerHeader(
     onVideoSettingsClick: (() -> Unit)?,
     onRandomEpisodeClick: (() -> Unit)?,
     onOpenInExternalPlayer: (() -> Unit)?,
+    onCastClick: (() -> Unit)?,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -584,6 +588,15 @@ private fun PlayerHeader(
                             buttonSize = metrics.headerIconSize + 16.dp,
                             iconSize = metrics.headerIconSize,
                             onClick = onSubmitIntroClick,
+                        )
+                    }
+                    if (onCastClick != null) {
+                        PlayerHeaderIconButton(
+                            icon = Icons.Rounded.Cast,
+                            contentDescription = "Cast to TV",
+                            buttonSize = metrics.headerIconSize + 16.dp,
+                            iconSize = metrics.headerIconSize,
+                            onClick = onCastClick,
                         )
                     }
                     if (onOpenInExternalPlayer != null) {

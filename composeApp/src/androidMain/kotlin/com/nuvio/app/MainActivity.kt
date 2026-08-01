@@ -20,6 +20,9 @@ import com.nuvio.app.core.storage.PlatformLocalAccountDataCleaner
 import com.nuvio.app.core.sync.SyncClientIdentityStorage
 import com.nuvio.app.core.ui.AppSystemUiController
 import com.nuvio.app.features.addons.AddonStorage
+import com.nuvio.app.features.cast.CastDelivery
+import com.nuvio.app.features.cast.CastPlatform
+import com.nuvio.app.features.cast.dlna.DlnaPlatform
 import com.nuvio.app.features.ai.AiAssistantSettingsStorage
 import com.nuvio.app.features.collection.CollectionMobileSettingsStorage
 import com.nuvio.app.features.collection.CollectionStorage
@@ -99,6 +102,11 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.setBackgroundDrawableResource(R.color.nuvio_background)
         SyncClientIdentityStorage.initialize(applicationContext)
+        // Cast initialisation is soft: on a device without Play services it leaves
+        // CastPlatform.isSupported false and the UI omits the Cast button.
+        CastPlatform.initialize(applicationContext)
+        CastDelivery.initialize(applicationContext)
+        DlnaPlatform.initialize(applicationContext)
         AddonStorage.initialize(applicationContext)
         CloudStreamPlatformStorage.initialize(this)
         AiAssistantSettingsStorage.initialize(applicationContext)

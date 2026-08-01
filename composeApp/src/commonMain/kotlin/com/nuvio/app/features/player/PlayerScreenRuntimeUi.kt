@@ -8,6 +8,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import com.nuvio.app.features.cast.ui.castingAvailable
+import com.nuvio.app.features.cast.ui.CastDevicePickerDialog
+import com.nuvio.app.features.cast.ui.CastDeliveryEffect
+import com.nuvio.app.features.cast.ui.CastReceiver
+import com.nuvio.app.features.cast.CastStreamRequest
+import com.nuvio.app.features.cast.CastPlatform
+import com.nuvio.app.features.cast.dlna.DlnaPlatform
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import com.nuvio.app.features.p2p.P2pStreamingState
@@ -208,6 +216,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         }
 
         RenderPlayerControls(displayedPositionMs = displayedPositionMs, isEpisode = isEpisode)
+        RenderCastPicker()
         RenderPlaybackOverlays(
             runtime = runtime,
             displayedPositionMs = displayedPositionMs,
@@ -269,6 +278,11 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long, 
             showDeviceStatusOverlay = showQuietDeviceStatusOverlay,
             onLockToggle = {
                 if (playerControlsLocked) unlockPlayerControls() else lockPlayerControls()
+            },
+            onCastClick = if (castingAvailable && !isLiveTv) {
+                { showCastPicker = true }
+            } else {
+                null
             },
             onBack = {
                 flushWatchProgress()
@@ -727,4 +741,63 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
             },
         )
     }
+}
+
+/**
+ * Cast entry point for the player.
+ *
+ * Connecting and delivering are separate steps on purpose: the receiver has to be connected
+ * before the planner can know which codecs it supports, so [CastDeliveryEffect] waits for a
+ * session and only then probes and prepares the stream.
+ */
+@Composable
+private fun PlayerScreenRuntime.RenderCastPicker() {
+    if (!castingAvailable) return
+
+    if (showCastPicker) {
+        CastDevicePickerDialog(
+            onDismiss = { showCastPicker = false },
+            onDeviceSelected = { receiver ->
+                when (receiver) {
+                    is CastReceiver.Chromecast -> CastPlatform.connect(receiver.device)
+                    is CastReceiver.Dlna -> DlnaPlatform.connect(receiver.device)
+                }
+                showCastPicker = false
+            },
+        )
+    }
+
+    // Local playback and Cast playback must not run at once, so pause the phone once the
+    // television has taken over.
+    val castRequest = remember(sourceUrl, title, activeStreamTitle) {
+        CastStreamRequest(
+            url = sourceUrl,
+            headers = sourceHeaders,
+            title = title,
+            subtitle = activeStreamTitle,
+            posterUrl = args.poster,
+            startPositionMs = playbackSnapshot.positionMs,
+            sourceReachableByReceiver = isReceiverReachable(sourceUrl, sourceHeaders),
+        )
+    }
+
+    CastDeliveryEffect(
+        request = castRequest,
+        onFinished = { result -> if (result.isSuccess) playerController?.pause() },
+    )
+}
+
+/**
+ * Whether a Chromecast could fetch this URL itself. Loopback belongs to the phone, private
+ * hosts may not be routable from the television, and an origin needing request headers cannot
+ * be handed over directly.
+ */
+private fun isReceiverReachable(url: String, headers: Map<String, String>): Boolean {
+    if (headers.isNotEmpty()) return false
+    val host = url.substringAfter("://", "").substringBefore('/').substringBefore(':').lowercase()
+    return host.isNotEmpty() &&
+        host != "localhost" &&
+        !host.startsWith("127.") &&
+        host != "0.0.0.0" &&
+        host != "[::1]"
 }
