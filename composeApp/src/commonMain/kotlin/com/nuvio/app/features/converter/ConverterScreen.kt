@@ -1,19 +1,17 @@
 package com.nuvio.app.features.converter
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SheetState
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,20 +19,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.nuvio.app.core.ui.NuvioDropdownOption
 import com.nuvio.app.core.ui.NuvioDropdownChip
+import com.nuvio.app.core.ui.NuvioDropdownOption
 import com.nuvio.app.core.ui.NuvioLoadingIndicator
-import com.nuvio.app.core.ui.NuvioModalBottomSheet
 import com.nuvio.app.core.ui.NuvioPrimaryButton
+import com.nuvio.app.core.ui.NuvioScreen
+import com.nuvio.app.core.ui.NuvioScreenHeader
 import com.nuvio.app.core.ui.NuvioToastController
-import com.nuvio.app.core.ui.dismissNuvioBottomSheet
 import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.features.cast.model.CastAudioCodec
 import com.nuvio.app.features.cast.model.CastContainer
@@ -47,29 +43,32 @@ import com.nuvio.app.features.downloads.formatDownloadBytes
 import com.nuvio.app.features.settings.SettingsGroup
 import com.nuvio.app.features.settings.SettingsGroupDivider
 import com.nuvio.app.features.settings.SettingsSwitchRow
-import kotlinx.coroutines.launch
 import nuvio.composeapp.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 
 /**
- * The convert sheet: presets up front, everything else behind an Advanced toggle.
+ * The converter, as a normal navigation destination.
+ *
+ * Was originally a bottom sheet. Every one of the 7 controls below opens its own dropdown sheet,
+ * and nesting a sheet inside a sheet turned out to be a real bug, not just an edge case: on iOS
+ * both sheets share one global "currently presented sheet" reference, so opening a dropdown here
+ * force-dismissed the outer sheet and then left that global pointing at an orphaned controller —
+ * which is why the sheet closed on interaction and then refused to reopen at all. A full screen
+ * has no such collision, and rides `NuvioScreen`'s `LazyColumn` for scrolling for free, which the
+ * sheet never had either.
  *
  * Opened for a single download or for a batch; the batch case shares one preset and one
  * replace-original choice across every selected item, which is what makes multi-select worth
  * having at all.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConvertSheet(
+fun ConverterScreen(
     items: List<DownloadItem>,
-    sheetState: SheetState,
     isTablet: Boolean,
-    onDismiss: () -> Unit,
+    onBack: () -> Unit,
 ) {
-    if (items.isEmpty()) return
-
     val tokens = MaterialTheme.nuvio
-    val coroutineScope = rememberCoroutineScope()
 
     var capabilities by remember { mutableStateOf<ConverterCapabilities?>(null) }
     var probe by remember { mutableStateOf<CastMediaProbe?>(null) }
@@ -79,17 +78,17 @@ fun ConvertSheet(
     var advancedExpanded by rememberSaveable { mutableStateOf(false) }
     var replaceOriginal by rememberSaveable { mutableStateOf(false) }
 
-    val primary = items.first()
+    val primary = items.firstOrNull()
 
     LaunchedEffect(Unit) {
         capabilities = runCatching { converterCapabilities() }
             .getOrDefault(ConverterCapabilities.Minimal)
     }
 
-    // Only the first item is probed. Probing a whole batch would delay the sheet for information
+    // Only the first item is probed. Probing a whole batch would delay the screen for information
     // the user cannot act on per-item anyway, since one preset applies to all of them.
-    LaunchedEffect(primary.id) {
-        val uri = DownloadsRepository.playableLocalFileUri(primary)
+    LaunchedEffect(primary?.id) {
+        val uri = primary?.let(DownloadsRepository::playableLocalFileUri)
         probe = uri?.let { probeCastMedia(it).getOrNull() }
         probeFinished = true
     }
@@ -107,34 +106,31 @@ fun ConvertSheet(
     val convertedToast = stringResource(Res.string.converter_enqueue_started)
     val missingToast = stringResource(Res.string.converter_enqueue_source_missing)
 
-    NuvioModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        fullHeight = true,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = tokens.spacing.sheetPadding),
-            verticalArrangement = Arrangement.spacedBy(tokens.spacing.controlGap),
-        ) {
-            Text(
-                text = if (items.size == 1) {
+    NuvioScreen {
+        stickyHeader {
+            NuvioScreenHeader(
+                title = if (items.size == 1) {
                     stringResource(Res.string.converter_sheet_title)
                 } else {
                     stringResource(Res.string.converter_sheet_title_batch, items.size)
                 },
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = tokens.colors.textPrimary,
+                onBack = onBack,
             )
+        }
 
+        if (primary == null) {
+            return@NuvioScreen
+        }
+
+        item {
             SourceSummary(
                 item = primary,
                 probe = probe,
                 probeFinished = probeFinished,
             )
+        }
 
+        item {
             PresetChips(
                 selected = preset,
                 capabilities = resolved,
@@ -143,8 +139,10 @@ fun ConvertSheet(
                     spec = ConversionPresets.specFor(chosen)
                 },
             )
+        }
 
-            planned?.estimatedOutputBytes?.let { estimate ->
+        planned?.estimatedOutputBytes?.let { estimate ->
+            item {
                 Text(
                     text = stringResource(
                         Res.string.converter_estimated_size,
@@ -154,8 +152,10 @@ fun ConvertSheet(
                     color = tokens.colors.textMuted,
                 )
             }
+        }
 
-            planned?.adjustments.orEmpty().forEach { adjustment ->
+        planned?.adjustments.orEmpty().forEach { adjustment ->
+            item {
                 adjustment.describe()?.let { note ->
                     Text(
                         text = note,
@@ -164,7 +164,9 @@ fun ConvertSheet(
                     )
                 }
             }
+        }
 
+        item {
             SettingsGroup(isTablet = isTablet) {
                 SettingsSwitchRow(
                     title = stringResource(Res.string.converter_replace_title),
@@ -182,7 +184,9 @@ fun ConvertSheet(
                     onCheckedChange = { advancedExpanded = it },
                 )
             }
+        }
 
+        item {
             AnimatedVisibility(visible = advancedExpanded) {
                 AdvancedControls(
                     spec = spec,
@@ -191,13 +195,17 @@ fun ConvertSheet(
                     onSpecChange = ::applySpec,
                 )
             }
+        }
 
+        item {
             Text(
                 text = stringResource(Res.string.converter_backend_label, resolved.backendLabel),
                 style = MaterialTheme.typography.bodySmall,
                 color = tokens.colors.textMuted,
             )
+        }
 
+        item {
             NuvioPrimaryButton(
                 text = if (items.size == 1) {
                     stringResource(Res.string.converter_action_convert)
@@ -212,11 +220,9 @@ fun ConvertSheet(
                         replaceOriginal = replaceOriginal,
                     )
                     NuvioToastController.show(if (queued > 0) convertedToast else missingToast)
-                    coroutineScope.launch { dismissNuvioBottomSheet(sheetState, onDismiss) }
+                    onBack()
                 },
             )
-
-            Spacer(modifier = Modifier.height(tokens.spacing.sectionGap))
         }
     }
 }
@@ -476,7 +482,10 @@ private fun AdvancedControls(
             ).map { (value, label) -> NuvioDropdownOption(value.name, label) }
             NuvioDropdownChip(
                 title = stringResource(Res.string.converter_field_subtitles),
-                label = subtitleOptions.first { it.key == spec.subtitles.name }.label,
+                // Safe lookup: the subtitle row is gated on `capabilities.hasFfmpeg` while
+                // `spec.subtitles` isn't, so a future capability edge case could otherwise land
+                // here with a value this particular option list doesn't contain.
+                label = subtitleOptions.firstOrNull { it.key == spec.subtitles.name }?.label.orEmpty(),
                 selectedKey = spec.subtitles.name,
                 options = subtitleOptions,
                 onSelected = { option ->
@@ -515,7 +524,7 @@ private fun BitrateSlider(
     val steps = ((rangeBitsPerSecond.last - rangeBitsPerSecond.first) / stepBitsPerSecond).toInt() - 1
 
     Column {
-        androidx.compose.foundation.layout.Row(
+        Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,

@@ -51,7 +51,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 
@@ -172,7 +171,7 @@ import com.nuvio.app.features.cloud.providerPosterUrl
 import com.nuvio.app.features.debrid.DirectDebridPlayableResult
 import com.nuvio.app.features.debrid.DirectDebridPlaybackResolver
 import com.nuvio.app.features.debrid.toastMessage
-import com.nuvio.app.features.converter.ConvertSheet
+import com.nuvio.app.features.converter.ConverterScreen
 import com.nuvio.app.features.downloads.DownloadItem
 import com.nuvio.app.features.downloads.DownloadStatus
 import com.nuvio.app.features.downloads.DownloadsRepository
@@ -343,6 +342,15 @@ object ContinueWatchingSettingsRoute
 
 @Serializable
 object DownloadsSettingsRoute
+
+/**
+ * Ids rather than full `DownloadItem`s, the same reason [PlayerRoute] carries a `launchId` rather
+ * than its payload: a route has to be serializable and cheap to carry on the back stack, and
+ * download ids are already stable and resolve for free against `DownloadsRepository`'s in-memory
+ * state.
+ */
+@Serializable
+data class ConverterRoute(val downloadIds: List<String>)
 
 @Serializable
 object AddonsSettingsRoute
@@ -834,8 +842,6 @@ private fun MainAppContent(
         // Staged the same way the delete confirmation is: the zoom overlay is a full-screen dialog,
         // and opening a bottom sheet on top of it races the dismissal animation.
         var convertAfterOverlayDismissTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
-        var convertSheetTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
-        val convertSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         var confirmDownloadDeleteTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
         val posterOverlayHazeState = rememberHazeState()
         var selectedContinueWatchingForActions by remember { mutableStateOf<ContinueWatchingItem?>(null) }
@@ -3303,6 +3309,9 @@ private fun MainAppContent(
                     )
                     DownloadsScreen(
                         onBack = onBack,
+                        onNavigateToConverter = { downloadIds ->
+                            navController.navigate(ConverterRoute(downloadIds = downloadIds))
+                        },
                         onOpenDownload = { item ->
                             val sourceUrl = DownloadsRepository.playableLocalFileUri(item) ?: return@DownloadsScreen
                             val resumeEntry = item.videoId
@@ -3343,6 +3352,22 @@ private fun MainAppContent(
                             val launchId = PlayerLaunchStore.put(playerLaunch)
                             navController.navigate(PlayerRoute(launchId = launchId))
                         },
+                    )
+                }
+                composable<ConverterRoute> { backStackEntry ->
+                    val onBack = rememberGuardedPopBackStack(
+                        navController = navController,
+                        backStackEntry = backStackEntry,
+                    )
+                    val route = backStackEntry.toRoute<ConverterRoute>()
+                    val items = remember(route.downloadIds) {
+                        val byId = DownloadsRepository.uiState.value.items.associateBy { it.id }
+                        route.downloadIds.mapNotNull(byId::get)
+                    }
+                    ConverterScreen(
+                        items = items,
+                        isTablet = false,
+                        onBack = onBack,
                     )
                 }
                 composable<AddonsSettingsRoute> { backStackEntry ->
@@ -3719,22 +3744,17 @@ private fun MainAppContent(
                                 confirmDownloadDeleteTarget = pendingDeleteTarget
                             }
                             if (pendingConvertTarget != null) {
-                                convertSheetTarget = pendingConvertTarget
+                                // `target.downloads` is already a list, so long-pressing a show
+                                // navigates into batch mode across its episodes for free. Staged
+                                // the same way the delete confirmation is, since navigating away
+                                // must not race the overlay's own dismiss animation.
+                                navController.navigate(
+                                    ConverterRoute(downloadIds = pendingConvertTarget.downloads.map { it.id }),
+                                )
                             }
                         },
                     )
                 }
-            }
-
-            convertSheetTarget?.let { target ->
-                // `target.downloads` is already a list, so long-pressing a show opens the sheet in
-                // batch mode across its episodes without any extra plumbing.
-                ConvertSheet(
-                    items = target.downloads,
-                    sheetState = convertSheetState,
-                    isTablet = false,
-                    onDismiss = { convertSheetTarget = null },
-                )
             }
 
             confirmDownloadDeleteTarget?.let { target ->

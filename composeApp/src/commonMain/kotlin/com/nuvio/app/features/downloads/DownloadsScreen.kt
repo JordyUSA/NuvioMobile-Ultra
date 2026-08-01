@@ -30,7 +30,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,7 +46,6 @@ import com.nuvio.app.core.i18n.localizedByteUnit
 import com.nuvio.app.core.ui.NuvioScreen
 import com.nuvio.app.core.ui.NuvioScreenHeader
 import com.nuvio.app.core.ui.NuvioToastController
-import com.nuvio.app.features.converter.ConvertSheet
 import com.nuvio.app.features.converter.ConverterRepository
 import com.nuvio.app.features.converter.conversionsContent
 import nuvio.composeapp.generated.resources.*
@@ -58,6 +56,7 @@ import org.jetbrains.compose.resources.stringResource
 fun DownloadsScreen(
     onBack: () -> Unit,
     onOpenDownload: (DownloadItem) -> Unit,
+    onNavigateToConverter: (List<String>) -> Unit,
     initialShowId: String? = null,
     onNavigateToShow: ((showId: String, title: String) -> Unit)? = null,
     onBackFromShow: (() -> Unit)? = null,
@@ -81,8 +80,6 @@ fun DownloadsScreen(
     // enough to redo that surviving a process death is not worth a custom Saver.
     var selectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(emptySet<String>()) }
-    var convertTargets by remember { mutableStateOf<List<DownloadItem>>(emptyList()) }
-    val convertSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     fun exitSelection() {
         selectionMode = false
@@ -92,18 +89,6 @@ fun DownloadsScreen(
     fun toggleSelection(item: DownloadItem) {
         selectedIds = if (item.id in selectedIds) selectedIds - item.id else selectedIds + item.id
         if (selectedIds.isEmpty()) selectionMode = false
-    }
-
-    if (convertTargets.isNotEmpty()) {
-        ConvertSheet(
-            items = convertTargets,
-            sheetState = convertSheetState,
-            isTablet = false,
-            onDismiss = {
-                convertTargets = emptyList()
-                exitSelection()
-            },
-        )
     }
 
     val completedEpisodes = remember(uiState.items) {
@@ -143,7 +128,9 @@ fun DownloadsScreen(
                         IconButton(
                             enabled = selectedIds.isNotEmpty(),
                             onClick = {
-                                convertTargets = uiState.items.filter { it.id in selectedIds }
+                                val ids = selectedIds.toList()
+                                exitSelection()
+                                onNavigateToConverter(ids)
                             },
                         ) {
                             Icon(
@@ -189,7 +176,7 @@ fun DownloadsScreen(
                 onOpenShow = { showId, title ->
                     onNavigateToShow?.invoke(showId, title) ?: run { selectedShowId = showId }
                 },
-                onConvert = { convertTargets = listOf(it) },
+                onConvert = { onNavigateToConverter(listOf(it.id)) },
                 selectionMode = selectionMode,
                 selectedIds = selectedIds,
                 onToggleSelection = ::toggleSelection,
@@ -203,7 +190,7 @@ fun DownloadsScreen(
                 showId = selectedShowId.orEmpty(),
                 episodes = completedEpisodes,
                 onOpenDownload = onOpenDownload,
-                onConvert = { convertTargets = listOf(it) },
+                onConvert = { onNavigateToConverter(listOf(it.id)) },
                 selectionMode = selectionMode,
                 selectedIds = selectedIds,
                 onToggleSelection = ::toggleSelection,

@@ -675,6 +675,7 @@
     <string name="downloads_status_failed">Failed</string>
     <string name="downloads_status_paused">Paused • %1$s</string>
     <string name="episodes_cd_watched">Watched</string>
+    <string name="episodes_cd_downloaded">Downloaded</string>
     <string name="episodes_season">Season %1$d</string>
     <string name="episodes_specials">Specials</string>
     <string name="floating_prompt_continue_where_left_off">Continue where you left off</string>
