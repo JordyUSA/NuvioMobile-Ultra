@@ -329,8 +329,21 @@ object ConverterRepository {
         val stored = runCatching { ConverterStorage.loadPayload() }.getOrNull()
         val decoded = stored?.let(ConverterCodec::decode).orEmpty()
 
-        val now = DownloadsClock.nowEpochMs()
-        val repaired = decoded
+        val repaired = repairLoadedJobs(decoded, DownloadsClock.nowEpochMs())
+
+        publish(repaired)
+        sweepOrphanedWorkFiles(repaired)
+        pump()
+    }
+
+    /**
+     * Brings a persisted queue back to a state the pump can act on.
+     *
+     * Kept pure and separate from [loadFromDisk] so the two decisions it encodes are testable
+     * without platform storage, which is the same reason `CastDeliveryPlanner` is a pure object.
+     */
+    internal fun repairLoadedJobs(jobs: List<ConversionJob>, nowEpochMs: Long): List<ConversionJob> =
+        jobs
             // A conversion has no resumable partial, so an interrupted job restarts from zero.
             // Downloads demote to Paused because they genuinely can resume; queueing is the
             // honest analogue here.
@@ -343,12 +356,7 @@ object ConverterRepository {
             }
             // Finished rows are history, not state. Dropping the stale ones keeps the payload from
             // growing without bound, since every mutation re-encodes the whole thing.
-            .filter { job -> job.isActive || now - job.updatedAtEpochMs < FINISHED_RETENTION_MS }
-
-        publish(repaired)
-        sweepOrphanedWorkFiles(repaired)
-        pump()
-    }
+            .filter { job -> job.isActive || nowEpochMs - job.updatedAtEpochMs < FINISHED_RETENTION_MS }
 
     /**
      * Deletes work files left behind by a crash or a kill.
