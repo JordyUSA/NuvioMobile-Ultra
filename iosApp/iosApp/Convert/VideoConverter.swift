@@ -240,18 +240,28 @@ final class VideoConverter {
 
     /// Buys the app-switch and brief-lock cases. iOS still suspends a long encode; the repository
     /// re-queues an interrupted job rather than failing it.
+    ///
+    /// Hopped to the main queue because `process` is driven from Kotlin's conversion coroutine,
+    /// which is not the main thread, and every `UIApplication` member touched here is main-thread
+    /// only — off-main access trips the main thread checker rather than failing quietly.
     private func beginBackgroundAssertion() {
-        UIApplication.shared.isIdleTimerDisabled = true
-        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "nuvio.conversion") { [weak self] in
-            self?.endBackgroundAssertion()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            UIApplication.shared.isIdleTimerDisabled = true
+            self.backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "nuvio.conversion") { [weak self] in
+                self?.endBackgroundAssertion()
+            }
         }
     }
 
     private func endBackgroundAssertion() {
-        UIApplication.shared.isIdleTimerDisabled = false
-        guard backgroundTask != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(backgroundTask)
-        backgroundTask = .invalid
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            UIApplication.shared.isIdleTimerDisabled = false
+            guard self.backgroundTask != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(self.backgroundTask)
+            self.backgroundTask = .invalid
+        }
     }
 
     private static func error(_ message: String) -> NSError {
