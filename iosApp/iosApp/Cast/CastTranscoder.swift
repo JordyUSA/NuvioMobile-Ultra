@@ -88,12 +88,16 @@ final class CastTranscoder {
         }
     }
 
-    /// Cancels every FFmpegKit session rather than tracking this one's id. There is only ever
-    /// one transcode in flight at a time here, and the session id accessor turned out to be
-    /// unreliable to reference from Swift across otherwise-identical builds (see the note in
-    /// `run` below) — cancelling everything sidesteps needing it at all.
+    /// Cancels every FFmpegKit session rather than tracking this one's id: the session id accessor
+    /// turned out to be unreliable to reference from Swift across otherwise-identical builds (see
+    /// the note in `run` below), so cancelling everything sidesteps needing it at all.
+    ///
+    /// That is only safe while exactly one session exists, which stopped being automatic once the
+    /// video converter started using FFmpegKit too. `FFmpegSessionCoordinator` restores the
+    /// invariant by admitting one owner at a time and ignoring a cancel from anyone else, so this
+    /// no longer reaches across and kills a running conversion.
     func cancel() {
-        FFmpegKit.cancel()
+        FFmpegSessionCoordinator.shared.cancel(.cast)
     }
 
     // MARK: - Probing
@@ -254,7 +258,10 @@ final class CastTranscoder {
         // next, purely because unrelated syntax changed earlier in the same statement. Giving
         // each closure a concrete type up front turns the call itself into ordinary
         // already-typed-argument matching instead of a shared inference problem.
+        FFmpegSessionCoordinator.shared.begin(.cast)
+
         let completeCallback: FFmpegSessionCompleteCallback = { (session: FFmpegSession?) in
+            FFmpegSessionCoordinator.shared.end(.cast)
             guard let session else {
                 DispatchQueue.main.async { completion(.failure(Self.error("ffmpeg session was nil"))) }
                 return

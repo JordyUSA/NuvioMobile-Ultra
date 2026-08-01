@@ -140,6 +140,35 @@ internal actual object DownloadsPlatformDownloader {
         return localFile.takeIf { it.exists() }?.toURI()?.toString()
     }
 
+    actual fun downloadsDirectoryPath(): String? {
+        val context = appContext ?: return null
+        return File(context.filesDir, "downloads").apply { mkdirs() }.absolutePath
+    }
+
+    actual fun renameFile(fromLocalFileUri: String, toFileName: String): String? {
+        val source = fromLocalFileUri.toLocalFileOrNull()?.takeIf { it.exists() } ?: return null
+        val context = appContext ?: return null
+        val destination = File(File(context.filesDir, "downloads").apply { mkdirs() }, toFileName)
+        if (destination.exists()) destination.delete()
+
+        // Same rename-then-copy shape the download path already uses: a rename can fail across
+        // storage boundaries even when both paths look like they sit in the same directory.
+        if (runCatching { source.renameTo(destination) }.getOrDefault(false)) {
+            return destination.toURI().toString()
+        }
+        return runCatching {
+            source.copyTo(destination, overwrite = true)
+            source.delete()
+            destination.toURI().toString()
+        }.getOrNull()
+    }
+
+    actual fun fileSizeBytes(localFileUri: String): Long? =
+        localFileUri.toLocalFileOrNull()
+            ?.takeIf { it.exists() }
+            ?.length()
+            ?.takeIf { it > 0L }
+
     actual fun cacheSubtitleFiles(
         subtitles: List<StreamSubtitle>,
         companionBaseFileName: String,

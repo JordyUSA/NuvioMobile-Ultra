@@ -44,8 +44,8 @@ object DownloadsRepository {
         ensureLoaded()
         val normalizedVideoId = videoId?.trim().orEmpty()
         if (normalizedVideoId.isBlank()) return null
-        return _uiState.value.items.firstOrNull { item ->
-            item.videoId == normalizedVideoId && item.hasPlayableLocalFile()
+        return _uiState.value.items.newestPlayable { item ->
+            item.videoId == normalizedVideoId
         }
     }
 
@@ -62,21 +62,33 @@ object DownloadsRepository {
         findPlayableDownloadByVideoId(videoId)?.let { return it }
 
         return if (seasonNumber != null && episodeNumber != null) {
-            items.firstOrNull { item ->
+            items.newestPlayable { item ->
                 item.parentMetaId == normalizedParentMetaId &&
                     item.seasonNumber == seasonNumber &&
-                    item.episodeNumber == episodeNumber &&
-                    item.hasPlayableLocalFile()
+                    item.episodeNumber == episodeNumber
             }
         } else {
-            items.firstOrNull { item ->
+            items.newestPlayable { item ->
                 item.parentMetaId == normalizedParentMetaId &&
                     item.seasonNumber == null &&
-                    item.episodeNumber == null &&
-                    item.hasPlayableLocalFile()
+                    item.episodeNumber == null
             }
         }
     }
+
+    /**
+     * The most recently touched playable match.
+     *
+     * Was `firstOrNull`, which was unambiguous only while one file existed per logical episode.
+     * The video converter can add a second item with the same identity, and someone who just
+     * converted a file for compatibility means that file to be the one that plays — so "newest
+     * wins" is both deterministic and the right answer.
+     */
+    private fun List<DownloadItem>.newestPlayable(
+        predicate: (DownloadItem) -> Boolean,
+    ): DownloadItem? =
+        filter { predicate(it) && it.hasPlayableLocalFile() }
+            .maxByOrNull { it.updatedAtEpochMs }
 
     fun playableLocalFileUri(item: DownloadItem): String? {
         ensureLoaded()
@@ -271,6 +283,93 @@ object DownloadsRepository {
 
         publish(_uiState.value.items.filterNot { it.id == downloadId })
         persist()
+    }
+
+    /**
+     * Adds a converted copy alongside the download it came from.
+     *
+     * Every metadata field is carried over — including [DownloadItem.videoId], so offline detail
+     * pages and watch progress still resolve — with a fresh id and its own timestamps. Returns null
+     * only when the source has since disappeared, which the caller treats as "delete the file we
+     * just produced" rather than as a silent success.
+     */
+    fun registerConvertedCopy(
+        source: DownloadItem,
+        fileName: String,
+        localFileUri: String,
+        totalBytes: Long?,
+        conversionLabel: String,
+    ): DownloadItem? {
+        ensureLoaded()
+        if (_uiState.value.items.none { it.id == source.id }) return null
+
+        val now = DownloadsClock.nowEpochMs()
+        val copy = source.copy(
+            id = nextDownloadId(now),
+            fileName = fileName,
+            localFileUri = localFileUri,
+            totalBytes = totalBytes,
+            downloadedBytes = totalBytes ?: source.downloadedBytes,
+            downloadSpeedBytesPerSecond = 0L,
+            status = DownloadStatus.Completed,
+            errorMessage = null,
+            convertedFromDownloadId = source.id,
+            conversionLabel = conversionLabel,
+            createdAtEpochMs = now,
+            updatedAtEpochMs = now,
+        )
+
+        publish(listOf(copy) + _uiState.value.items)
+        persist()
+        return copy
+    }
+
+    /**
+     * Points an existing download at a converted file, replacing the original on disk.
+     *
+     * The record is updated and persisted *before* the old file is deleted, so a kill at any point
+     * leaves the item pointing at a file that exists. The worst case is one orphaned file, which
+     * `resolveLocalFileUri` already tolerates — the opposite order would leave a download entry
+     * pointing at nothing.
+     *
+     * The item's id, videoId and parent metadata are all preserved, so watch progress and library
+     * grouping survive the swap.
+     */
+    fun replaceLocalFile(
+        downloadId: String,
+        newFileName: String,
+        newLocalFileUri: String,
+        newTotalBytes: Long?,
+        conversionLabel: String,
+    ): Boolean {
+        ensureLoaded()
+        val existing = _uiState.value.items.firstOrNull { it.id == downloadId } ?: return false
+        val previousUri = playableLocalFileUri(existing) ?: existing.localFileUri
+        val previousFileName = existing.fileName
+
+        mutateItem(downloadId) { current ->
+            current.copy(
+                fileName = newFileName,
+                localFileUri = newLocalFileUri,
+                totalBytes = newTotalBytes,
+                downloadedBytes = newTotalBytes ?: current.downloadedBytes,
+                status = DownloadStatus.Completed,
+                errorMessage = null,
+                conversionLabel = conversionLabel,
+                updatedAtEpochMs = DownloadsClock.nowEpochMs(),
+            )
+        }
+
+        // Only now, with the new location recorded and persisted, is the old file expendable. A
+        // failure here is not worth failing the conversion over — it leaves a stray file, nothing
+        // more.
+        if (previousUri != null && previousUri != newLocalFileUri) {
+            runCatching { DownloadsPlatformDownloader.removeFile(previousUri) }
+        }
+        if (previousFileName != newFileName) {
+            runCatching { DownloadsPlatformDownloader.removePartialFile(previousFileName) }
+        }
+        return true
     }
 
     fun findOfflineMetaDetails(type: String, id: String): MetaDetails? {

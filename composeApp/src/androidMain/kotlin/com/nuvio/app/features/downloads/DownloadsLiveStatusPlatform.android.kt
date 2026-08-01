@@ -17,6 +17,9 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.nuvio.app.core.deeplink.buildDownloadsDeepLinkUrl
+import com.nuvio.app.features.converter.ConversionJob
+import com.nuvio.app.features.converter.ConversionStatus
+import com.nuvio.app.features.converter.ConverterRepository
 import kotlinx.coroutines.runBlocking
 import nuvio.composeapp.generated.resources.*
 import org.jetbrains.compose.resources.getString
@@ -39,9 +42,34 @@ internal actual object DownloadsLiveStatusPlatform {
     private val artworkCache = mutableMapOf<String, Bitmap?>()
     private var foregroundServiceRequested = false
 
+    /**
+     * Conversions share the downloads foreground service and its notification rather than adding a
+     * second of each: both are long-running background work on the same files, and two competing
+     * persistent notifications would be worse than one that describes both.
+     */
+    private var activeConversions: List<ConversionJob> = emptyList()
+    private var lastConversionRenderKey: String? = null
+
     fun initialize(context: Context) {
         appContext = context.applicationContext
         ensureNotificationChannel()
+        ConverterRepository.onQueueChanged = ::onConversionsChanged
+    }
+
+    /**
+     * Called on every queue change, which includes each progress tick, so the render key is
+     * compared before touching the notification — the same reason [lastRenderStateById] exists for
+     * downloads.
+     */
+    private fun onConversionsChanged(jobs: List<ConversionJob>) {
+        val context = appContext ?: return
+        activeConversions = jobs.filter { it.isActive }
+
+        val renderKey = activeConversions.joinToString("|") { "${it.id}:${it.status}:${it.progressPercent}" }
+        if (renderKey == lastConversionRenderKey) return
+        lastConversionRenderKey = renderKey
+
+        syncForegroundService(context, DownloadsRepository.uiState.value.items)
     }
 
     fun bindActivity(activity: ComponentActivity) {
@@ -279,19 +307,26 @@ internal actual object DownloadsLiveStatusPlatform {
         )
 
         val contentTitle = runBlocking { getString(Res.string.downloads_channel_name) }
+        val conversionText = buildConversionSummary()
         val contentText = when {
-            primaryItem == null -> contentTitle
-            downloadingItems.size == 1 -> listOf(
-                buildSubtitle(primaryItem),
-                buildMetadata(primaryItem),
-            ).filter { it.isNotBlank() }.joinToString(" • ")
-            else -> runBlocking {
-                getString(
-                    Res.string.downloads_live_multiple_active,
-                    downloadingItems.size,
-                    buildSubtitle(primaryItem),
-                )
-            }
+            // With nothing downloading, a running conversion is the only thing worth describing —
+            // otherwise the notification would just repeat its own title.
+            primaryItem == null -> conversionText ?: contentTitle
+            downloadingItems.size == 1 -> listOfNotNull(
+                buildSubtitle(primaryItem).takeIf { it.isNotBlank() },
+                buildMetadata(primaryItem).takeIf { it.isNotBlank() },
+                conversionText,
+            ).joinToString(" • ")
+            else -> listOfNotNull(
+                runBlocking {
+                    getString(
+                        Res.string.downloads_live_multiple_active,
+                        downloadingItems.size,
+                        buildSubtitle(primaryItem),
+                    )
+                },
+                conversionText,
+            ).joinToString(" • ")
         }
 
         val builder = NotificationCompat.Builder(context, channelId)
@@ -531,7 +566,7 @@ internal actual object DownloadsLiveStatusPlatform {
         context.getSharedPreferences(notificationsPrefName, Context.MODE_PRIVATE)
 
     private fun syncForegroundService(context: Context, items: List<DownloadItem>) {
-        if (items.any { it.status == DownloadStatus.Downloading }) {
+        if (items.any { it.status == DownloadStatus.Downloading } || activeConversions.isNotEmpty()) {
             if (!foregroundServiceRequested) {
                 DownloadsForegroundService.start(context)
                 foregroundServiceRequested = true
@@ -548,6 +583,21 @@ internal actual object DownloadsLiveStatusPlatform {
             runCatching {
                 NotificationManagerCompat.from(context).cancel(foregroundNotificationId)
             }
+        }
+    }
+
+    /** "Converting Blade Runner • 42%", or null when nothing is converting. */
+    private fun buildConversionSummary(): String? {
+        val running = activeConversions.firstOrNull { it.status == ConversionStatus.Running }
+            ?: activeConversions.firstOrNull()
+            ?: return null
+        val title = runBlocking { getString(Res.string.converter_notification_title) }
+        return if (running.progressPercent in 0..100) {
+            runBlocking {
+                getString(Res.string.converter_notification_progress, title, running.progressPercent)
+            }
+        } else {
+            title
         }
     }
 

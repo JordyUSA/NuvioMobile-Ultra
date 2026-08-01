@@ -1,6 +1,8 @@
 package com.nuvio.app.features.downloads
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,17 +15,22 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,9 +47,13 @@ import com.nuvio.app.core.i18n.localizedByteUnit
 import com.nuvio.app.core.ui.NuvioScreen
 import com.nuvio.app.core.ui.NuvioScreenHeader
 import com.nuvio.app.core.ui.NuvioToastController
+import com.nuvio.app.features.converter.ConvertSheet
+import com.nuvio.app.features.converter.ConverterRepository
+import com.nuvio.app.features.converter.conversionsContent
 import nuvio.composeapp.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadsScreen(
     onBack: () -> Unit,
@@ -56,8 +67,44 @@ fun DownloadsScreen(
         DownloadsRepository.uiState
     }.collectAsStateWithLifecycle()
 
+    val converterState by remember {
+        ConverterRepository.ensureLoaded()
+        ConverterRepository.uiState
+    }.collectAsStateWithLifecycle()
+
     var selectedShowId by rememberSaveable(initialShowId) { mutableStateOf(initialShowId) }
     val openDownloadsDirectoryFailedText = stringResource(Res.string.downloads_open_directory_failed)
+
+    // Selection mode lives here rather than in the repository: it is view state, gone the moment
+    // the screen leaves the back stack. Deliberately not `rememberSaveable` — the default saver
+    // cannot round-trip an arbitrary List<String> through a Bundle, and a selection is cheap
+    // enough to redo that surviving a process death is not worth a custom Saver.
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+    var convertTargets by remember { mutableStateOf<List<DownloadItem>>(emptyList()) }
+    val convertSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    fun exitSelection() {
+        selectionMode = false
+        selectedIds = emptySet()
+    }
+
+    fun toggleSelection(item: DownloadItem) {
+        selectedIds = if (item.id in selectedIds) selectedIds - item.id else selectedIds + item.id
+        if (selectedIds.isEmpty()) selectionMode = false
+    }
+
+    if (convertTargets.isNotEmpty()) {
+        ConvertSheet(
+            items = convertTargets,
+            sheetState = convertSheetState,
+            isTablet = false,
+            onDismiss = {
+                convertTargets = emptyList()
+                exitSelection()
+            },
+        )
+    }
 
     val completedEpisodes = remember(uiState.items) {
         uiState.completedItems
@@ -80,28 +127,60 @@ fun DownloadsScreen(
                     selectedShowTitle ?: stringResource(Res.string.downloads_show_downloads)
                 },
                 onBack = {
-                    if (selectedShowId != null) {
-                        onBackFromShow?.invoke() ?: run { selectedShowId = null }
-                    } else {
-                        onBack()
+                    when {
+                        selectionMode -> exitSelection()
+                        selectedShowId != null -> onBackFromShow?.invoke() ?: run { selectedShowId = null }
+                        else -> onBack()
                     }
                 },
                 actions = {
-                    IconButton(
-                        onClick = {
-                            if (!DownloadsPlatformDownloader.openDownloadsDirectory()) {
-                                NuvioToastController.show(openDownloadsDirectoryFailedText)
-                            }
-                        },
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Folder,
-                            contentDescription = stringResource(Res.string.downloads_open_directory),
+                    if (selectionMode) {
+                        Text(
+                            text = stringResource(Res.string.converter_selection_count, selectedIds.size),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        IconButton(
+                            enabled = selectedIds.isNotEmpty(),
+                            onClick = {
+                                convertTargets = uiState.items.filter { it.id in selectedIds }
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Tune,
+                                contentDescription = stringResource(Res.string.converter_action_convert),
+                            )
+                        }
+                        IconButton(onClick = ::exitSelection) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = stringResource(Res.string.converter_action_dismiss),
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = {
+                                if (!DownloadsPlatformDownloader.openDownloadsDirectory()) {
+                                    NuvioToastController.show(openDownloadsDirectoryFailedText)
+                                }
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Folder,
+                                contentDescription = stringResource(Res.string.downloads_open_directory),
+                            )
+                        }
                     }
                 },
             )
         }
+
+        conversionsContent(
+            state = converterState,
+            onCancel = ConverterRepository::cancel,
+            onRetry = ConverterRepository::retry,
+            onDismiss = ConverterRepository::dismiss,
+        )
 
         if (selectedShowId == null) {
             downloadsRootContent(
@@ -110,12 +189,28 @@ fun DownloadsScreen(
                 onOpenShow = { showId, title ->
                     onNavigateToShow?.invoke(showId, title) ?: run { selectedShowId = showId }
                 },
+                onConvert = { convertTargets = listOf(it) },
+                selectionMode = selectionMode,
+                selectedIds = selectedIds,
+                onToggleSelection = ::toggleSelection,
+                onEnterSelection = { item ->
+                    selectionMode = true
+                    selectedIds = setOf(item.id)
+                },
             )
         } else {
             downloadsShowContent(
                 showId = selectedShowId.orEmpty(),
                 episodes = completedEpisodes,
                 onOpenDownload = onOpenDownload,
+                onConvert = { convertTargets = listOf(it) },
+                selectionMode = selectionMode,
+                selectedIds = selectedIds,
+                onToggleSelection = ::toggleSelection,
+                onEnterSelection = { item ->
+                    selectionMode = true
+                    selectedIds = setOf(item.id)
+                },
             )
         }
     }
@@ -125,6 +220,11 @@ private fun LazyListScope.downloadsRootContent(
     uiState: DownloadsUiState,
     onOpenDownload: (DownloadItem) -> Unit,
     onOpenShow: (showId: String, title: String) -> Unit,
+    onConvert: (DownloadItem) -> Unit,
+    selectionMode: Boolean,
+    selectedIds: Set<String>,
+    onToggleSelection: (DownloadItem) -> Unit,
+    onEnterSelection: (DownloadItem) -> Unit,
 ) {
     val activeItems = uiState.activeItems
     val completedMovies = uiState.completedItems.filterNot(DownloadItem::isEpisode)
@@ -153,6 +253,11 @@ private fun LazyListScope.downloadsRootContent(
                 onResume = { DownloadsRepository.resumeDownload(item.id) },
                 onRetry = { DownloadsRepository.retryDownload(item.id) },
                 onDelete = { DownloadsRepository.cancelDownload(item.id) },
+                onConvert = { onConvert(item) },
+                selectionMode = selectionMode,
+                isSelected = item.id in selectedIds,
+                onToggleSelection = { onToggleSelection(item) },
+                onEnterSelection = { onEnterSelection(item) },
             )
         }
     }
@@ -172,6 +277,11 @@ private fun LazyListScope.downloadsRootContent(
                 onResume = { DownloadsRepository.resumeDownload(item.id) },
                 onRetry = { DownloadsRepository.retryDownload(item.id) },
                 onDelete = { DownloadsRepository.cancelDownload(item.id) },
+                onConvert = { onConvert(item) },
+                selectionMode = selectionMode,
+                isSelected = item.id in selectedIds,
+                onToggleSelection = { onToggleSelection(item) },
+                onEnterSelection = { onEnterSelection(item) },
             )
         }
     }
@@ -248,6 +358,11 @@ private fun LazyListScope.downloadsShowContent(
     showId: String,
     episodes: List<DownloadItem>,
     onOpenDownload: (DownloadItem) -> Unit,
+    onConvert: (DownloadItem) -> Unit,
+    selectionMode: Boolean,
+    selectedIds: Set<String>,
+    onToggleSelection: (DownloadItem) -> Unit,
+    onEnterSelection: (DownloadItem) -> Unit,
 ) {
     val showEpisodes = episodes
         .filter { it.parentMetaId == showId }
@@ -304,11 +419,17 @@ private fun LazyListScope.downloadsShowContent(
                 onResume = { DownloadsRepository.resumeDownload(item.id) },
                 onRetry = { DownloadsRepository.retryDownload(item.id) },
                 onDelete = { DownloadsRepository.cancelDownload(item.id) },
+                onConvert = { onConvert(item) },
+                selectionMode = selectionMode,
+                isSelected = item.id in selectedIds,
+                onToggleSelection = { onToggleSelection(item) },
+                onEnterSelection = { onEnterSelection(item) },
             )
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DownloadRow(
     item: DownloadItem,
@@ -317,6 +438,11 @@ private fun DownloadRow(
     onResume: () -> Unit,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
+    onConvert: () -> Unit,
+    selectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelection: () -> Unit,
+    onEnterSelection: () -> Unit,
 ) {
     val displayTitle = item.displayTitle()
     val displaySubtitle = downloadDisplaySubtitle(
@@ -325,13 +451,23 @@ private fun DownloadRow(
     )
     val progressInfoLines = item.downloadProgressInfoLines()
 
+    // Long-press enters selection mode, and only for completed items — there is nothing useful to
+    // batch-convert about a download that has not finished.
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clickable(enabled = item.isPlayable, onClick = onOpen),
+            .combinedClickable(
+                enabled = item.isPlayable || selectionMode,
+                onClick = { if (selectionMode) onToggleSelection() else onOpen() },
+                onLongClick = { if (!selectionMode && item.isPlayable) onEnterSelection() },
+            ),
         shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        color = if (isSelected) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
     ) {
         Column(
             modifier = Modifier
@@ -384,6 +520,13 @@ private fun DownloadRow(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (selectionMode) {
+                        Checkbox(
+                            checked = isSelected,
+                            onCheckedChange = { onToggleSelection() },
+                        )
+                        return@Row
+                    }
                     when (item.status) {
                         DownloadStatus.Downloading -> {
                             IconButton(onClick = onPause) {
@@ -414,6 +557,12 @@ private fun DownloadRow(
                                 Icon(
                                     imageVector = Icons.Rounded.PlayArrow,
                                     contentDescription = stringResource(Res.string.action_play),
+                                )
+                            }
+                            IconButton(onClick = onConvert) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Tune,
+                                    contentDescription = stringResource(Res.string.converter_action_convert),
                                 )
                             }
                         }

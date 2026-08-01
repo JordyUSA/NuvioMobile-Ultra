@@ -30,6 +30,8 @@ import com.nuvio.app.features.cloudstream.CloudStreamPlatformStorage
 import com.nuvio.app.features.debrid.DebridSettingsStorage
 import com.nuvio.app.features.downloads.DownloadsLiveStatusPlatform
 import com.nuvio.app.features.downloads.DownloadsPlatformDownloader
+import com.nuvio.app.features.converter.ConversionEngine
+import com.nuvio.app.features.converter.ConverterStorage
 import com.nuvio.app.features.downloads.DownloadsStorage
 import com.nuvio.app.features.library.LibraryDisplaySettingsStorage
 import com.nuvio.app.features.library.LibraryStorage
@@ -156,6 +158,8 @@ class MainActivity : AppCompatActivity() {
         DownloadsPlatformDownloader.initialize(applicationContext)
         DownloadsLiveStatusPlatform.initialize(applicationContext)
         DownloadsLiveStatusPlatform.bindActivity(this)
+        ConverterStorage.initialize(applicationContext)
+        ConversionEngine.initialize(applicationContext)
         AndroidAppUpdaterPlatform.initialize(applicationContext)
         PlatformLocalAccountDataCleaner.initialize(applicationContext)
         EpisodeReleaseNotificationPlatform.initialize(applicationContext)

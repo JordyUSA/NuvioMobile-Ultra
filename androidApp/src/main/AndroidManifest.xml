@@ -7,6 +7,12 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!--
+        Video conversion is pure CPU/GPU work with no network activity to keep the device awake,
+        so unlike a download it will stall when the screen goes off. Held only for the span of a
+        running conversion, and with a timeout so a wedged job cannot pin the CPU.
+    -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:allowBackup="false"

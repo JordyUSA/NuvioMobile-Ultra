@@ -11,3 +11,9 @@ import android.content.Context
  * composeApp/libs, to swap in the FFmpeg implementation from src/androidFfmpeg.
  */
 internal fun createFFmpegCastProcessor(context: Context): CastMediaProcessor? = null
+
+/**
+ * Null means "no FFmpeg in this build". The converter's capability probe reads this as "Media3
+ * does everything", which is exactly right here.
+ */
+internal fun ffmpegCapabilityReport(): FFmpegCapabilityReport? = null

@@ -10,6 +10,7 @@ import com.nuvio.app.features.addons.AddonRepository
 import com.nuvio.app.features.collection.CollectionMobileSettingsRepository
 import com.nuvio.app.features.collection.CollectionRepository
 import com.nuvio.app.features.cloudstream.CloudStreamRepository
+import com.nuvio.app.features.converter.ConverterRepository
 import com.nuvio.app.features.downloads.DownloadsRepository
 import com.nuvio.app.features.details.FavoritePeopleRepository
 import com.nuvio.app.features.details.MetaScreenSettingsRepository
@@ -272,6 +273,9 @@ object ProfileRepository {
         }
         runProfileChangeStep("downloads") {
             DownloadsRepository.onProfileChanged()
+        }
+        runProfileChangeStep("converter") {
+            ConverterRepository.onProfileChanged()
         }
         runProfileChangeStep("live_tv") {
             LiveTvRepository.onProfileChanged()

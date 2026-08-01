@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
@@ -50,6 +51,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 
@@ -170,6 +172,7 @@ import com.nuvio.app.features.cloud.providerPosterUrl
 import com.nuvio.app.features.debrid.DirectDebridPlayableResult
 import com.nuvio.app.features.debrid.DirectDebridPlaybackResolver
 import com.nuvio.app.features.debrid.toastMessage
+import com.nuvio.app.features.converter.ConvertSheet
 import com.nuvio.app.features.downloads.DownloadItem
 import com.nuvio.app.features.downloads.DownloadStatus
 import com.nuvio.app.features.downloads.DownloadsRepository
@@ -828,6 +831,11 @@ private fun MainAppContent(
         var selectedDownloadActionTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
         var selectedDownloadActionAnchor by remember { mutableStateOf<PosterZoomAnchor?>(null) }
         var confirmDownloadDeleteAfterOverlayDismissTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
+        // Staged the same way the delete confirmation is: the zoom overlay is a full-screen dialog,
+        // and opening a bottom sheet on top of it races the dismissal animation.
+        var convertAfterOverlayDismissTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
+        var convertSheetTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
+        val convertSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         var confirmDownloadDeleteTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
         val posterOverlayHazeState = rememberHazeState()
         var selectedContinueWatchingForActions by remember { mutableStateOf<ContinueWatchingItem?>(null) }
@@ -3672,6 +3680,13 @@ private fun MainAppContent(
                                 },
                             ),
                             PosterZoomOverlayAction(
+                                icon = Icons.Default.Tune,
+                                label = stringResource(Res.string.converter_action_convert),
+                                onSelected = {
+                                    convertAfterOverlayDismissTarget = target
+                                },
+                            ),
+                            PosterZoomOverlayAction(
                                 icon = Icons.Default.DeleteOutline,
                                 label = stringResource(Res.string.action_delete),
                                 isDestructive = true,
@@ -3695,15 +3710,31 @@ private fun MainAppContent(
                         hazeState = posterOverlayHazeState,
                         onDismissed = {
                             val pendingDeleteTarget = confirmDownloadDeleteAfterOverlayDismissTarget
+                            val pendingConvertTarget = convertAfterOverlayDismissTarget
                             selectedDownloadActionTarget = null
                             selectedDownloadActionAnchor = null
                             confirmDownloadDeleteAfterOverlayDismissTarget = null
+                            convertAfterOverlayDismissTarget = null
                             if (pendingDeleteTarget != null) {
                                 confirmDownloadDeleteTarget = pendingDeleteTarget
+                            }
+                            if (pendingConvertTarget != null) {
+                                convertSheetTarget = pendingConvertTarget
                             }
                         },
                     )
                 }
+            }
+
+            convertSheetTarget?.let { target ->
+                // `target.downloads` is already a list, so long-pressing a show opens the sheet in
+                // batch mode across its episodes without any extra plumbing.
+                ConvertSheet(
+                    items = target.downloads,
+                    sheetState = convertSheetState,
+                    isTablet = false,
+                    onDismiss = { convertSheetTarget = null },
+                )
             }
 
             confirmDownloadDeleteTarget?.let { target ->

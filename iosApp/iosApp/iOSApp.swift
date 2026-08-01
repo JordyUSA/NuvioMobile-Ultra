@@ -20,6 +20,10 @@ struct iOSApp: App {
     /// HTTP requests, which letting it deallocate would silently cut off.
     private let dlnaTransport = DlnaTransport.install()
 
+    /// Backs `ConversionEngine.ios.kt`'s FFmpegKit conversions. Held for the same lifetime reason
+    /// as the bridges above: it owns any in-flight conversion and its background-task assertion.
+    private let converterBridge = ConverterBridgeImpl.install()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
