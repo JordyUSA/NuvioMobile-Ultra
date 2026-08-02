@@ -30,12 +30,17 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CheckCircleOutline
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -46,6 +51,7 @@ import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -126,6 +132,7 @@ import com.nuvio.app.core.ui.LocalNuvioNavBarScrollState
 import com.nuvio.app.core.ui.NuvioClassicNavigationBar
 import com.nuvio.app.core.ui.NuvioNavigationBar
 import com.nuvio.app.core.ui.NuvioContinueWatchingActionSheet
+import com.nuvio.app.core.ui.NuvioModalBottomSheet
 import com.nuvio.app.core.ui.NuvioPosterZoomActionOverlay
 import com.nuvio.app.core.ui.NuvioStatusModal
 import com.nuvio.app.core.ui.PosterZoomAnchor
@@ -171,9 +178,18 @@ import com.nuvio.app.features.cloud.providerPosterUrl
 import com.nuvio.app.features.debrid.DirectDebridPlayableResult
 import com.nuvio.app.features.debrid.DirectDebridPlaybackResolver
 import com.nuvio.app.features.debrid.toastMessage
+import com.nuvio.app.features.converter.ConversionPreset
+import com.nuvio.app.features.converter.ConversionPresets
+import com.nuvio.app.features.converter.ConversionStatus
+import com.nuvio.app.features.converter.ConverterRepository
 import com.nuvio.app.features.converter.ConverterScreen
+import com.nuvio.app.features.converter.isActive
+import com.nuvio.app.features.converter.isTerminal
+import com.nuvio.app.features.converter.labelRes
+import com.nuvio.app.features.converter.titleRes
 import com.nuvio.app.features.downloads.DownloadItem
 import com.nuvio.app.features.downloads.DownloadStatus
+import com.nuvio.app.features.downloads.DownloadsPlatformDownloader
 import com.nuvio.app.features.downloads.DownloadsRepository
 import com.nuvio.app.features.downloads.DownloadsScreen
 import com.nuvio.app.features.downloads.downloadProgressInfoLines
@@ -190,6 +206,7 @@ import com.nuvio.app.features.home.HomeScreen
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.components.CollectionCardRemoteImage
 import com.nuvio.app.features.library.LibraryItem
+import com.nuvio.app.features.library.LibraryConversionActionTarget
 import com.nuvio.app.features.library.LibraryDownloadActionCommand
 import com.nuvio.app.features.library.LibraryDownloadActionTarget
 import com.nuvio.app.features.library.LibraryRepository
@@ -843,6 +860,11 @@ private fun MainAppContent(
         // and opening a bottom sheet on top of it races the dismissal animation.
         var convertAfterOverlayDismissTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
         var confirmDownloadDeleteTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
+        var selectedConversionActionTarget by remember { mutableStateOf<LibraryConversionActionTarget?>(null) }
+        var selectedConversionActionAnchor by remember { mutableStateOf<PosterZoomAnchor?>(null) }
+        var downloadsErrorTarget by remember { mutableStateOf<String?>(null) }
+        var presetPickerAfterOverlayDismissJobId by remember { mutableStateOf<String?>(null) }
+        var presetPickerJobId by remember { mutableStateOf<String?>(null) }
         val posterOverlayHazeState = rememberHazeState()
         var selectedContinueWatchingForActions by remember { mutableStateOf<ContinueWatchingItem?>(null) }
         var requestedSettingsPageName by rememberSaveable { mutableStateOf(initialSettingsPageName) }
@@ -885,6 +907,15 @@ private fun MainAppContent(
             coroutineScope.launch {
                 withFrameNanos { }
                 selectedDownloadActionTarget = target
+            }
+        }
+        val openConversionActions: (LibraryConversionActionTarget, PosterZoomAnchor?) -> Unit = { target, anchor ->
+            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+            focusManager.clearFocus(force = true)
+            selectedConversionActionAnchor = anchor
+            coroutineScope.launch {
+                withFrameNanos { }
+                selectedConversionActionTarget = target
             }
         }
         val profileState by ProfileRepository.state.collectAsStateWithLifecycle()
@@ -2169,6 +2200,12 @@ private fun MainAppContent(
                                         },
                                         onLibraryDownloadLongClick = { target, anchor ->
                                             openDownloadActions(target, anchor)
+                                        },
+                                        onLibraryConversionLongClick = { target, anchor ->
+                                            openConversionActions(target, anchor)
+                                        },
+                                        onConvertDownloads = { downloadIds ->
+                                            navController.navigate(ConverterRoute(downloadIds = downloadIds))
                                         },
                                         onAddonsSettingsClick = { navController.navigate(AddonsSettingsRoute) },
                                         onPluginsSettingsClick = {
@@ -3664,15 +3701,26 @@ private fun MainAppContent(
                                         },
                                     ),
                                 )
-                                DownloadStatus.Failed -> add(
-                                    PosterZoomOverlayAction(
-                                        icon = Icons.Default.Refresh,
-                                        label = stringResource(Res.string.action_retry),
-                                        onSelected = {
-                                            DownloadsRepository.retryDownload(primaryDownload.id)
-                                        },
-                                    ),
-                                )
+                                DownloadStatus.Failed -> {
+                                    add(
+                                        PosterZoomOverlayAction(
+                                            icon = Icons.Default.Refresh,
+                                            label = stringResource(Res.string.action_retry),
+                                            onSelected = {
+                                                DownloadsRepository.retryDownload(primaryDownload.id)
+                                            },
+                                        ),
+                                    )
+                                    add(
+                                        PosterZoomOverlayAction(
+                                            icon = Icons.Default.Info,
+                                            label = stringResource(Res.string.downloads_error_dialog_title),
+                                            onSelected = {
+                                                downloadsErrorTarget = primaryDownload.errorMessage
+                                            },
+                                        ),
+                                    )
+                                }
                                 DownloadStatus.Completed -> Unit
                             }
                             add(
@@ -3702,6 +3750,15 @@ private fun MainAppContent(
                                 label = stringResource(Res.string.home_view_details),
                                 onSelected = {
                                     navController.navigate(DetailRoute(type = item.type, id = item.id, offline = true))
+                                },
+                            ),
+                            PosterZoomOverlayAction(
+                                icon = Icons.Default.Share,
+                                label = stringResource(Res.string.converter_action_share),
+                                onSelected = {
+                                    DownloadsRepository.playableLocalFileUri(primaryDownload)?.let { uri ->
+                                        DownloadsPlatformDownloader.shareFile(uri, primaryDownload.title)
+                                    }
                                 },
                             ),
                             PosterZoomOverlayAction(
@@ -3772,6 +3829,140 @@ private fun MainAppContent(
                         confirmDownloadDeleteTarget = null
                     },
                 )
+            }
+
+            selectedConversionActionTarget?.let { target ->
+                val job = target.job
+                val conversionActions = buildList {
+                    if (job.isActive) {
+                        add(
+                            PosterZoomOverlayAction(
+                                icon = Icons.Default.Close,
+                                label = stringResource(Res.string.converter_action_cancel),
+                                isDestructive = true,
+                                onSelected = { ConverterRepository.cancel(job.id) },
+                            ),
+                        )
+                    }
+                    if (job.status == ConversionStatus.Queued) {
+                        val jobs = ConverterRepository.uiState.value.jobs
+                        val index = jobs.indexOfFirst { it.id == job.id }
+                        if (index > 0) {
+                            add(
+                                PosterZoomOverlayAction(
+                                    icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                    label = stringResource(Res.string.downloads_queue_title) + " ↑",
+                                    onSelected = { ConverterRepository.reorder(index, index - 1) },
+                                ),
+                            )
+                        }
+                        if (index in 0 until jobs.lastIndex && jobs.getOrNull(index + 1)?.status == ConversionStatus.Queued) {
+                            add(
+                                PosterZoomOverlayAction(
+                                    icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    label = stringResource(Res.string.downloads_queue_title) + " ↓",
+                                    onSelected = { ConverterRepository.reorder(index, index + 1) },
+                                ),
+                            )
+                        }
+                        add(
+                            PosterZoomOverlayAction(
+                                icon = Icons.Default.Tune,
+                                label = stringResource(Res.string.converter_action_change_preset),
+                                onSelected = { presetPickerAfterOverlayDismissJobId = job.id },
+                            ),
+                        )
+                    }
+                    if (job.status == ConversionStatus.Failed) {
+                        add(
+                            PosterZoomOverlayAction(
+                                icon = Icons.Default.Refresh,
+                                label = stringResource(Res.string.converter_action_retry),
+                                onSelected = { ConverterRepository.retry(job.id) },
+                            ),
+                        )
+                        add(
+                            PosterZoomOverlayAction(
+                                icon = Icons.Default.Info,
+                                label = stringResource(Res.string.downloads_error_dialog_title),
+                                onSelected = { downloadsErrorTarget = job.errorMessage },
+                            ),
+                        )
+                    }
+                    if (job.status.isTerminal) {
+                        add(
+                            PosterZoomOverlayAction(
+                                icon = Icons.Default.DeleteOutline,
+                                label = stringResource(Res.string.converter_action_dismiss),
+                                isDestructive = true,
+                                onSelected = { ConverterRepository.dismiss(job.id) },
+                            ),
+                        )
+                    }
+                }
+
+                NuvioPosterZoomActionOverlay(
+                    imageUrl = job.poster,
+                    backgroundImageUrl = null,
+                    title = job.title,
+                    subtitle = stringResource(job.status.labelRes()),
+                    synopsis = null,
+                    isWatched = false,
+                    anchor = selectedConversionActionAnchor,
+                    actions = conversionActions,
+                    hazeState = posterOverlayHazeState,
+                    onDismissed = {
+                        val pendingPresetJobId = presetPickerAfterOverlayDismissJobId
+                        selectedConversionActionTarget = null
+                        selectedConversionActionAnchor = null
+                        presetPickerAfterOverlayDismissJobId = null
+                        if (pendingPresetJobId != null) {
+                            presetPickerJobId = pendingPresetJobId
+                        }
+                    },
+                )
+            }
+
+            downloadsErrorTarget?.let { message ->
+                NuvioStatusModal(
+                    title = stringResource(Res.string.downloads_error_dialog_title),
+                    message = message.ifBlank { stringResource(Res.string.downloads_status_failed) },
+                    isVisible = true,
+                    confirmText = stringResource(Res.string.downloads_error_dialog_dismiss),
+                    onConfirm = { downloadsErrorTarget = null },
+                )
+            }
+
+            presetPickerJobId?.let { jobId ->
+                val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+                NuvioModalBottomSheet(
+                    onDismissRequest = { presetPickerJobId = null },
+                    sheetState = sheetState,
+                ) {
+                    androidx.compose.foundation.layout.Column(
+                        modifier = Modifier.padding(bottom = 24.dp),
+                    ) {
+                        ConversionPresets.selectable.forEach { preset ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        coroutineScope.launch {
+                                            sheetState.hide()
+                                            presetPickerJobId = null
+                                            ConverterRepository.updateSpec(jobId, preset, ConversionPresets.specFor(preset))
+                                        }
+                                    }
+                                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(imageVector = Icons.Default.Tune, contentDescription = null)
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Text(text = stringResource(preset.titleRes()), style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
             }
 
             NuvioContinueWatchingActionSheet(
@@ -4091,6 +4282,8 @@ private fun AppTabHost(
     onConnectCloudClick: (() -> Unit)? = null,
     onLibraryDownloadClick: ((DownloadItem) -> Unit)? = null,
     onLibraryDownloadLongClick: ((LibraryDownloadActionTarget, PosterZoomAnchor?) -> Unit)? = null,
+    onLibraryConversionLongClick: ((LibraryConversionActionTarget, PosterZoomAnchor?) -> Unit)? = null,
+    onConvertDownloads: ((List<String>) -> Unit)? = null,
     onContinueWatchingClick: ((ContinueWatchingItem) -> Unit)? = null,
     onContinueWatchingLongPress: ((ContinueWatchingItem) -> Unit)? = null,
     onSearchPersonClick: ((TmdbPersonSearchResult) -> Unit)? = null,
@@ -4166,6 +4359,8 @@ private fun AppTabHost(
                         onOpenDownload = onLibraryDownloadClick,
                         downloadActionCommands = libraryDownloadActionCommands,
                         onDownloadLongClick = onLibraryDownloadLongClick,
+                        onConversionLongClick = onLibraryConversionLongClick,
+                        onConvertDownloads = onConvertDownloads,
                     )
                 }
 

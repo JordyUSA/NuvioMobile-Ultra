@@ -68,6 +68,7 @@ import com.nuvio.app.core.ui.NuvioScreenHeader
 import com.nuvio.app.core.ui.NuvioStatusModal
 import com.nuvio.app.core.ui.NuvioToastController
 import com.nuvio.app.core.ui.PillTone
+import com.nuvio.app.core.ui.SelectionActionBar
 import com.nuvio.app.core.ui.StatusPill
 import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.features.converter.ConversionJob
@@ -513,85 +514,6 @@ private fun DownloadsFilterChip(
                 )
             }
         }
-    }
-}
-
-// --- Selection bulk bar ----------------------------------------------------------------------
-
-@Composable
-private fun SelectionActionBar(
-    selectedCount: Int,
-    canConvert: Boolean,
-    canShare: Boolean,
-    canCancel: Boolean,
-    canDelete: Boolean,
-    onConvert: () -> Unit,
-    onShare: () -> Unit,
-    onCancel: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    val tokens = MaterialTheme.nuvio
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(12.dp),
-        color = tokens.colors.surfaceCard,
-        shape = tokens.shapes.compactCard,
-        shadowElevation = 8.dp,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (canConvert) {
-                BulkActionButton(
-                    icon = Icons.Rounded.Tune,
-                    label = stringResource(Res.string.downloads_bulk_convert, selectedCount),
-                    onClick = onConvert,
-                )
-            }
-            if (canShare) {
-                BulkActionButton(
-                    icon = Icons.Rounded.Share,
-                    label = stringResource(Res.string.converter_action_share),
-                    onClick = onShare,
-                )
-            }
-            if (canCancel) {
-                BulkActionButton(
-                    icon = Icons.Rounded.Close,
-                    label = stringResource(Res.string.downloads_bulk_cancel, selectedCount),
-                    onClick = onCancel,
-                )
-            }
-            if (canDelete) {
-                BulkActionButton(
-                    icon = Icons.Rounded.Delete,
-                    label = stringResource(Res.string.downloads_bulk_delete, selectedCount),
-                    onClick = onDelete,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun BulkActionButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    onClick: () -> Unit,
-) {
-    val tokens = MaterialTheme.nuvio
-    Column(
-        modifier = Modifier.clickable(onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Icon(imageVector = icon, contentDescription = label, tint = tokens.colors.textPrimary)
-        Text(text = label, style = MaterialTheme.typography.labelSmall, color = tokens.colors.textSecondary)
     }
 }
 
