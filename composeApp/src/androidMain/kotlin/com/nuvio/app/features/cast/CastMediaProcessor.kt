@@ -64,12 +64,24 @@ interface CastMediaProcessor {
          * [onProgress] so existing trailing-lambda call sites are untouched.
          */
         options: MediaProcessOptions = MediaProcessOptions(),
-        onProgress: (Int) -> Unit = {},
+        onProgress: (CastProcessProgress) -> Unit = {},
     ): Result<File>
 
     /** Aborts an in-flight export. */
     fun cancel()
 }
+
+/**
+ * One progress tick from a [CastMediaProcessor]. [percent] is advisory (Media3 cannot always
+ * estimate it); the rest is only ever populated by the FFmpeg backend, which is the only one that
+ * sees real encoder statistics.
+ */
+data class CastProcessProgress(
+    val percent: Int,
+    val speedMultiplier: Float? = null,
+    val fps: Float? = null,
+    val outputBytes: Long? = null,
+)
 
 /**
  * The handful of choices that are properties of *how* to process rather than of *what* the output
@@ -107,7 +119,7 @@ class Media3CastMediaProcessor(private val context: Context) : CastMediaProcesso
         durationMs: Long?,
         headers: Map<String, String>,
         options: MediaProcessOptions,
-        onProgress: (Int) -> Unit,
+        onProgress: (CastProcessProgress) -> Unit,
     ): Result<File> = withContext(Dispatchers.Main) {
         output.parentFile?.mkdirs()
         if (output.exists()) output.delete()
@@ -121,7 +133,7 @@ class Media3CastMediaProcessor(private val context: Context) : CastMediaProcesso
                 delay(PROGRESS_POLL_MS)
                 val instance = transformer ?: continue
                 if (instance.getProgress(holder) == Transformer.PROGRESS_STATE_AVAILABLE) {
-                    onProgress(holder.progress)
+                    onProgress(CastProcessProgress(percent = holder.progress))
                 }
             }
         }
@@ -355,7 +367,7 @@ private class FallbackCastMediaProcessor(
         durationMs: Long?,
         headers: Map<String, String>,
         options: MediaProcessOptions,
-        onProgress: (Int) -> Unit,
+        onProgress: (CastProcessProgress) -> Unit,
     ): Result<File> {
         active = primary
         val first = primary.process(sourceUrl, plan, output, durationMs, headers, options, onProgress)

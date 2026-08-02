@@ -128,7 +128,15 @@ object ConverterRepository {
         val job = _uiState.value.jobs.firstOrNull { it.id == jobId } ?: return
         if (!job.status.isTerminal || job.status == ConversionStatus.Completed) return
         mutate(jobId) {
-            it.copy(status = ConversionStatus.Queued, progressPercent = 0, errorMessage = null)
+            it.copy(
+                status = ConversionStatus.Queued,
+                progressPercent = 0,
+                errorMessage = null,
+                startedAtEpochMs = null,
+                etaMs = null,
+                speedMultiplier = null,
+                fps = null,
+            )
         }
         pump()
     }
@@ -144,6 +152,53 @@ object ConverterRepository {
     fun clearFinished() {
         ensureLoaded()
         publish(_uiState.value.jobs.filter { it.isActive })
+    }
+
+    /**
+     * Re-splices the job list so a queued conversion runs sooner or later. [fromIndex]/[toIndex]
+     * are positions within the full job list (the same list the drag UI renders), not just the
+     * queued subset — the running job (if any) is always first and the UI keeps it undraggable, so
+     * in practice this only ever reorders entries whose status is [ConversionStatus.Queued]. The
+     * pump always takes `firstOrNull { Queued }`, so splicing the list is the entire effect; no
+     * other repository state needs to change.
+     */
+    fun reorder(fromIndex: Int, toIndex: Int) {
+        ensureLoaded()
+        publish(reorderJobs(_uiState.value.jobs, fromIndex, toIndex))
+    }
+
+    /** Pure list splice, pulled out of [reorder] so it is checkable without the live singleton. */
+    internal fun reorderJobs(jobs: List<ConversionJob>, fromIndex: Int, toIndex: Int): List<ConversionJob> {
+        if (fromIndex !in jobs.indices || toIndex !in jobs.indices || fromIndex == toIndex) return jobs
+        val mutable = jobs.toMutableList()
+        val moved = mutable.removeAt(fromIndex)
+        mutable.add(toIndex, moved)
+        return mutable
+    }
+
+    /**
+     * Changes the spec a still-[ConversionStatus.Queued] job will run with — the "change preset"
+     * action. Guarded to Queued because a Running job has already handed its old spec to the
+     * engine; there is nothing to update in place.
+     */
+    fun updateSpec(jobId: String, preset: ConversionPreset, spec: ConversionSpec) {
+        ensureLoaded()
+        val job = _uiState.value.jobs.firstOrNull { it.id == jobId } ?: return
+        if (job.status != ConversionStatus.Queued) return
+        val now = DownloadsClock.nowEpochMs()
+        mutate(jobId) {
+            it.copy(
+                preset = preset,
+                spec = spec,
+                outputFileName = buildOutputFileName(
+                    item = DownloadsRepository.uiState.value.items
+                        .firstOrNull { item -> item.id == it.sourceDownloadId }
+                        ?: return@mutate it,
+                    spec = spec,
+                    nowEpochMs = now,
+                ),
+            )
+        }
     }
 
     // --- The pump ----------------------------------------------------------------------------
@@ -180,11 +235,14 @@ object ConverterRepository {
             .getOrDefault(ConverterCapabilities.Minimal)
         val planned = ConversionPlanner.plan(probe, job.spec, capabilities)
 
+        val startedAt = DownloadsClock.nowEpochMs()
         mutate(jobId) {
             it.copy(
                 status = ConversionStatus.Running,
                 progressPercent = 0,
                 sourceDurationMs = probe.durationMs,
+                estimatedOutputBytes = planned.estimatedOutputBytes,
+                startedAtEpochMs = startedAt,
             )
         }
 
@@ -197,7 +255,7 @@ object ConverterRepository {
                 outputFileName = job.outputFileName,
                 durationMs = probe.durationMs,
                 preferHardwareEncoder = job.spec.preferHardwareEncoder,
-                onProgress = { percent -> updateProgress(jobId, percent) },
+                onProgress = { progress -> updateProgress(jobId, progress, startedAt) },
             )
         } catch (cancellation: CancellationException) {
             // cancel() has already written the Cancelled state; re-throwing keeps the coroutine's
@@ -277,17 +335,46 @@ object ConverterRepository {
 
     // --- State -------------------------------------------------------------------------------
 
-    private fun updateProgress(jobId: String, percent: Int) {
+    private fun updateProgress(jobId: String, progress: ConversionProgress, startedAtEpochMs: Long) {
         val current = _uiState.value.jobs.firstOrNull { it.id == jobId } ?: return
-        if (current.progressPercent == percent) return
+        if (
+            current.progressPercent == progress.percent &&
+            current.etaMs == progress.etaMs &&
+            current.speedMultiplier == progress.speedMultiplier &&
+            current.fps == progress.fps
+        ) {
+            return
+        }
+
+        // The engine's own ETA (FFmpeg, from real encode speed) wins when it has one; Media3 never
+        // supplies one, so fall back to a plain percent-over-elapsed-time projection instead of
+        // showing nothing.
+        val eta = progress.etaMs ?: derivedEtaMs(progress.percent, startedAtEpochMs)
+
         // Progress alone is not persisted: a tick every few hundred milliseconds would re-encode
         // the whole payload to disk for information that is worthless after a restart anyway.
         publish(
             _uiState.value.jobs.map { job ->
-                if (job.id == jobId) job.copy(progressPercent = percent) else job
+                if (job.id == jobId) {
+                    job.copy(
+                        progressPercent = progress.percent,
+                        etaMs = eta,
+                        speedMultiplier = progress.speedMultiplier,
+                        fps = progress.fps,
+                    )
+                } else {
+                    job
+                }
             },
             persist = false,
         )
+    }
+
+    private fun derivedEtaMs(percent: Int, startedAtEpochMs: Long): Long? {
+        if (percent <= 0 || percent >= 100) return null
+        val elapsedMs = DownloadsClock.nowEpochMs() - startedAtEpochMs
+        if (elapsedMs <= 0L) return null
+        return (elapsedMs.toDouble() / percent * (100 - percent)).toLong()
     }
 
     private fun mutate(jobId: String, transform: (ConversionJob) -> ConversionJob) {
@@ -349,7 +436,14 @@ object ConverterRepository {
             // honest analogue here.
             .map { job ->
                 if (job.status == ConversionStatus.Running || job.status == ConversionStatus.Probing) {
-                    job.copy(status = ConversionStatus.Queued, progressPercent = 0)
+                    job.copy(
+                        status = ConversionStatus.Queued,
+                        progressPercent = 0,
+                        startedAtEpochMs = null,
+                        etaMs = null,
+                        speedMultiplier = null,
+                        fps = null,
+                    )
                 } else {
                     job
                 }

@@ -48,10 +48,19 @@ final class VideoConverter {
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var activeJobId: String?
 
+    /// A single progress tick. `etaMs`/`speedMultiplier`/`fps` are -1 when FFmpeg's statistics
+    /// callback has not reported them yet (its first tick or two can be empty).
+    struct Progress {
+        let percent: Int
+        let etaMs: Int64
+        let speedMultiplier: Float
+        let fps: Float
+    }
+
     /// `completion` is always called exactly once, on the main thread.
     func process(
         request: Request,
-        onProgress: @escaping (Int) -> Void,
+        onProgress: @escaping (Progress) -> Void,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         try? FileManager.default.removeItem(atPath: request.outputPath)
@@ -126,7 +135,7 @@ final class VideoConverter {
     private func run(
         encoder: Encoder,
         request: Request,
-        onProgress: @escaping (Int) -> Void,
+        onProgress: @escaping (Progress) -> Void,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         let arguments = buildArguments(encoder: encoder, request: request)
@@ -156,8 +165,17 @@ final class VideoConverter {
         let statisticsCallback: StatisticsCallback = { (statistics: Statistics?) in
             guard let statistics, durationMs > 0 else { return }
             let done = Int64(statistics.getTime())
-            let percent = Int((done * 100) / durationMs)
-            DispatchQueue.main.async { onProgress(min(max(percent, 0), 100)) }
+            let percent = min(max(Int((done * 100) / durationMs), 0), 100)
+            let speed = Float(statistics.getSpeed())
+            let remainingMs = durationMs - done
+            let etaMs: Int64 = speed > 0 ? Int64(Double(remainingMs) / Double(speed)) : -1
+            let progress = Progress(
+                percent: percent,
+                etaMs: etaMs,
+                speedMultiplier: speed > 0 ? speed : -1,
+                fps: statistics.getVideoFps() > 0 ? Float(statistics.getVideoFps()) : -1
+            )
+            DispatchQueue.main.async { onProgress(progress) }
         }
 
         FFmpegKit.execute(

@@ -38,9 +38,14 @@ import platform.Foundation.NSURLSessionDataTask
 import platform.Foundation.NSURLSessionTask
 import platform.Foundation.setHTTPMethod
 import platform.Foundation.setValue
+import platform.UIKit.UIActivityViewController
 import platform.UIKit.UIApplication
+import platform.UIKit.UIViewController
+import platform.Foundation.NSProcessInfo
 import platform.Foundation.timeIntervalSince1970
 import platform.darwin.NSObject
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
 import platform.posix.FILE
 import platform.posix.fclose
 import platform.posix.fflush
@@ -278,6 +283,48 @@ internal actual object DownloadsPlatformDownloader {
         )
         return true
     }
+
+    actual fun shareFile(localFileUri: String, title: String): Boolean {
+        val path = localFileUri.toLocalPath() ?: return false
+        if (!NSFileManager.defaultManager.fileExistsAtPath(path)) return false
+        val presenter = topViewController() ?: return false
+
+        dispatch_async(dispatch_get_main_queue()) {
+            val activityController = UIActivityViewController(
+                activityItems = listOf(NSURL.fileURLWithPath(path)),
+                applicationActivities = null,
+            )
+            // Required on iPad or presenting crashes: a share sheet with no popover anchor has
+            // nowhere to point its arrow.
+            activityController.popoverPresentationController?.let { popover ->
+                popover.sourceView = presenter.view
+                popover.sourceRect = presenter.view.bounds
+            }
+            presenter.presentViewController(activityController, animated = true, completion = null)
+        }
+        return true
+    }
+
+    actual fun availableStorageBytes(): Long? {
+        val attributes = NSFileManager.defaultManager
+            .attributesOfFileSystemForPath(downloadsDirectory(), error = null)
+            ?: return null
+        return when (val value = attributes["NSFileSystemFreeSize"]) {
+            is Long -> value
+            is Number -> value.toLong()
+            else -> null
+        }
+    }
+
+    actual fun isLowPowerModeActive(): Boolean = NSProcessInfo.processInfo.isLowPowerModeEnabled
+}
+
+private fun topViewController(): UIViewController? {
+    var controller = UIApplication.sharedApplication.keyWindow?.rootViewController
+    while (controller?.presentedViewController != null) {
+        controller = controller.presentedViewController
+    }
+    return controller
 }
 
 private class IosDownloadsTaskHandle(

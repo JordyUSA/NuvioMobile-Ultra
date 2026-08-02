@@ -70,8 +70,13 @@ object ConverterHost {
         this.listener = listener
     }
 
-    fun onProgress(jobId: String, percent: Int) {
-        listener?.onProgress(jobId, percent)
+    /**
+     * [etaMs]/[speedMultiplier]/[fps] cross the Kotlin/Objective-C boundary as sentinel-bearing
+     * primitives rather than nullables, matching the scalars-only discipline the rest of this
+     * bridge already follows: -1 means "not available this tick".
+     */
+    fun onProgress(jobId: String, percent: Int, etaMs: Long, speedMultiplier: Float, fps: Float) {
+        listener?.onProgress(jobId, percent, etaMs, speedMultiplier, fps)
     }
 
     fun onCompleted(jobId: String, success: Boolean, message: String?) {
@@ -80,6 +85,6 @@ object ConverterHost {
 }
 
 internal interface ConverterCallbackListener {
-    fun onProgress(jobId: String, percent: Int)
+    fun onProgress(jobId: String, percent: Int, etaMs: Long, speedMultiplier: Float, fps: Float)
     fun onCompleted(jobId: String, success: Boolean, message: String?)
 }

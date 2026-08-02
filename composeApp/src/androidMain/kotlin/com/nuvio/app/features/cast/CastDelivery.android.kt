@@ -89,7 +89,7 @@ actual object CastDelivery {
                 durationMs = probe?.durationMs,
                 headers = request.headers,
             ) { progress ->
-                _status.value = CastDeliveryStatus.Preparing(plan.mode, progress, plan.reasons)
+                _status.value = CastDeliveryStatus.Preparing(plan.mode, progress.percent, plan.reasons)
             }.getOrElse { error ->
                 Log.w(TAG, "${plan.mode} failed", error)
                 return fail(

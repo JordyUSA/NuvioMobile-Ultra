@@ -821,9 +821,11 @@ private fun LazyListScope.downloadsLibraryContent(
 }
 
 @Composable
-private fun LibraryDownloadsEmptyState(
+internal fun LibraryDownloadsEmptyState(
     onManageClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    title: String = stringResource(Res.string.downloads_empty_title),
+    message: String = stringResource(Res.string.downloads_empty_message),
 ) {
     Column(
         modifier = modifier
@@ -839,14 +841,14 @@ private fun LibraryDownloadsEmptyState(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                text = stringResource(Res.string.downloads_empty_title),
+                text = title,
                 modifier = Modifier.widthIn(max = 430.dp),
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center,
             )
             Text(
-                text = stringResource(Res.string.downloads_empty_message),
+                text = message,
                 modifier = Modifier.widthIn(max = 430.dp),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -883,7 +885,7 @@ private fun LibraryDownloadsEmptyState(
 }
 
 @Composable
-private fun LibraryDownloadsEmptyArtwork(
+internal fun LibraryDownloadsEmptyArtwork(
     modifier: Modifier = Modifier,
 ) {
     val primaryColor = MaterialTheme.colorScheme.primary
@@ -938,7 +940,7 @@ private fun LibraryDownloadsEmptyArtwork(
 }
 
 @Composable
-private fun LibraryDownloadsArtworkCard(
+internal fun LibraryDownloadsArtworkCard(
     modifier: Modifier = Modifier,
     alpha: Float,
 ) {

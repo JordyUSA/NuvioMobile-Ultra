@@ -29,8 +29,9 @@ internal data class ConversionOutput(
 internal expect object ConversionEngine {
 
     /**
-     * [onProgress] reports 0..100, or -1 when the backend cannot estimate — Media3's Transformer
-     * genuinely cannot for some inputs, so the UI must handle an indeterminate bar.
+     * [onProgress] reports 0..100 in [ConversionProgress.percent], or -1 when the backend cannot
+     * estimate — Media3's Transformer genuinely cannot for some inputs, so the UI must handle an
+     * indeterminate bar. The remaining fields are FFmpeg-only; Media3 leaves them null.
      */
     suspend fun convert(
         sourceLocalFileUri: String,
@@ -44,7 +45,7 @@ internal expect object ConversionEngine {
         outputFileName: String,
         durationMs: Long?,
         preferHardwareEncoder: Boolean,
-        onProgress: (Int) -> Unit,
+        onProgress: (ConversionProgress) -> Unit,
     ): Result<ConversionOutput>
 
     fun cancel()

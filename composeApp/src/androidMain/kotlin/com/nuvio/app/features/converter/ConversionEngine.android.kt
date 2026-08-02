@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.PowerManager
 import android.util.Log
 import com.nuvio.app.features.cast.CastMediaProcessor
+import com.nuvio.app.features.cast.CastProcessProgress
 import com.nuvio.app.features.cast.MediaProcessOptions
 import com.nuvio.app.features.cast.conversionMediaProcessor
 import com.nuvio.app.features.downloads.DownloadsPlatformDownloader
@@ -39,7 +40,7 @@ internal actual object ConversionEngine {
         outputFileName: String,
         durationMs: Long?,
         preferHardwareEncoder: Boolean,
-        onProgress: (Int) -> Unit,
+        onProgress: (ConversionProgress) -> Unit,
     ): Result<ConversionOutput> {
         val context = appContext
             ?: return Result.failure(IllegalStateException("Conversion engine is not initialized"))
@@ -70,7 +71,7 @@ internal actual object ConversionEngine {
                     dropVideo = dropVideo,
                     keepSubtitles = keepSubtitles,
                 ),
-                onProgress = onProgress,
+                onProgress = { raw -> onProgress(raw.toConversionProgress(durationMs)) },
             ).getOrElse { error ->
                 workFile.delete()
                 return Result.failure(error)
@@ -104,6 +105,26 @@ internal actual object ConversionEngine {
 
     actual fun cancel() {
         activeProcessor?.cancel()
+    }
+
+    /**
+     * [CastProcessProgress.speedMultiplier] is encode-time-over-wall-time, so the remaining wall
+     * time is just the remaining source duration divided by it — no EWMA needed since FFmpeg's own
+     * statistic already smooths this.
+     */
+    private fun CastProcessProgress.toConversionProgress(durationMs: Long?): ConversionProgress {
+        val eta = if (durationMs != null && durationMs > 0 && percent in 0..100) {
+            val remainingMs = durationMs - (durationMs * percent / 100)
+            speedMultiplier?.takeIf { it > 0f }?.let { (remainingMs / it).toLong() }
+        } else {
+            null
+        }
+        return ConversionProgress(
+            percent = percent,
+            etaMs = eta,
+            speedMultiplier = speedMultiplier,
+            fps = fps,
+        )
     }
 
     private fun acquireWakeLock(context: Context): PowerManager.WakeLock? =

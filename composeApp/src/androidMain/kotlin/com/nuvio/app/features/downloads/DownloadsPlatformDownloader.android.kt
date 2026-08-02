@@ -2,6 +2,8 @@ package com.nuvio.app.features.downloads
 
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
+import android.os.StatFs
 import androidx.core.content.FileProvider
 import com.nuvio.app.features.streams.StreamSubtitle
 import kotlinx.coroutines.CancellationException
@@ -263,6 +265,46 @@ internal actual object DownloadsPlatformDownloader {
                 true
             }.getOrDefault(false)
         }
+    }
+
+    actual fun shareFile(localFileUri: String, title: String): Boolean {
+        val context = appContext ?: return false
+        val file = localFileUri.toLocalFileOrNull()?.takeIf { it.exists() } ?: return false
+        val uri = runCatching {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        }.getOrNull() ?: return false
+
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = context.contentResolver.getType(uri) ?: "video/*"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_TITLE, title)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val chooser = Intent.createChooser(sendIntent, title).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return runCatching {
+            context.startActivity(chooser)
+            true
+        }.getOrDefault(false)
+    }
+
+    actual fun availableStorageBytes(): Long? {
+        val context = appContext ?: return null
+        val downloadsDir = File(context.filesDir, "downloads").apply { mkdirs() }
+        return runCatching {
+            val stats = StatFs(downloadsDir.absolutePath)
+            stats.availableBytes
+        }.getOrNull()
+    }
+
+    actual fun isLowPowerModeActive(): Boolean {
+        val context = appContext ?: return false
+        return runCatching {
+            val manager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            manager.isPowerSaveMode
+        }.getOrDefault(false)
     }
 }
 

@@ -20,6 +20,7 @@ import com.nuvio.app.core.deeplink.buildDownloadsDeepLinkUrl
 import com.nuvio.app.features.converter.ConversionJob
 import com.nuvio.app.features.converter.ConversionStatus
 import com.nuvio.app.features.converter.ConverterRepository
+import com.nuvio.app.features.converter.isActive
 import kotlinx.coroutines.runBlocking
 import nuvio.composeapp.generated.resources.*
 import org.jetbrains.compose.resources.getString
@@ -49,6 +50,7 @@ internal actual object DownloadsLiveStatusPlatform {
      */
     private var activeConversions: List<ConversionJob> = emptyList()
     private var lastConversionRenderKey: String? = null
+    private val lastConversionStatusById = mutableMapOf<String, ConversionStatus>()
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
@@ -64,12 +66,74 @@ internal actual object DownloadsLiveStatusPlatform {
     private fun onConversionsChanged(jobs: List<ConversionJob>) {
         val context = appContext ?: return
         activeConversions = jobs.filter { it.isActive }
+        notifyConversionCompletions(context, jobs)
 
         val renderKey = activeConversions.joinToString("|") { "${it.id}:${it.status}:${it.progressPercent}" }
         if (renderKey == lastConversionRenderKey) return
         lastConversionRenderKey = renderKey
 
         syncForegroundService(context, DownloadsRepository.uiState.value.items)
+    }
+
+    /**
+     * Same diff shape as the download-completion branch of [onItemsChanged]: a notification fires
+     * only for a job seen active in a *previous* call that has since gone terminal, so restoring an
+     * already-finished job from disk on launch never fires one.
+     */
+    private fun notifyConversionCompletions(context: Context, jobs: List<ConversionJob>) {
+        val seenIds = mutableSetOf<String>()
+        jobs.forEach { job ->
+            seenIds += job.id
+            val previousStatus = lastConversionStatusById[job.id]
+            lastConversionStatusById[job.id] = job.status
+
+            val justFinished = previousStatus != null &&
+                previousStatus.isActive &&
+                (job.status == ConversionStatus.Completed || job.status == ConversionStatus.Failed)
+            if (!justFinished || !canPostNotifications(context)) return@forEach
+
+            runCatching {
+                NotificationManagerCompat.from(context).notify(
+                    notificationId("cv:${job.id}"),
+                    buildConversionCompletionNotification(context, job),
+                )
+            }
+        }
+        lastConversionStatusById.keys.retainAll(seenIds)
+    }
+
+    private fun buildConversionCompletionNotification(context: Context, job: ConversionJob): android.app.Notification {
+        val launchIntent = Intent(context, com.nuvio.app.MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = android.net.Uri.parse(buildDownloadsDeepLinkUrl())
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val launchPendingIntent = PendingIntent.getActivity(
+            context,
+            notificationId("cv:${job.id}"),
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val contentText = if (job.status == ConversionStatus.Completed) {
+            runBlocking { getString(Res.string.converter_notification_completed) }
+        } else {
+            job.errorMessage?.takeIf { it.isNotBlank() }
+                ?: runBlocking { getString(Res.string.converter_notification_failed) }
+        }
+
+        return NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(com.nuvio.app.R.drawable.ic_notification_small)
+            .setContentTitle(job.title)
+            .setContentText(contentText)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setContentIntent(launchPendingIntent)
+            .build()
     }
 
     fun bindActivity(activity: ComponentActivity) {

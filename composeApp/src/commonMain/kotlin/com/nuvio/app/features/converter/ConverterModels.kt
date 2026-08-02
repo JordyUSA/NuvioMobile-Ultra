@@ -108,6 +108,13 @@ data class ConversionJob(
     val outputLocalFileUri: String? = null,
     val sourceDurationMs: Long? = null,
     val outputBytes: Long? = null,
+    /** Predicted output size, computed by the planner once probing finishes. Null until then. */
+    val estimatedOutputBytes: Long? = null,
+    /** Set the moment the job enters [ConversionStatus.Running]; the base for a derived ETA. */
+    val startedAtEpochMs: Long? = null,
+    val etaMs: Long? = null,
+    val speedMultiplier: Float? = null,
+    val fps: Float? = null,
     val errorMessage: String? = null,
     val createdAtEpochMs: Long,
     val updatedAtEpochMs: Long,

@@ -97,7 +97,7 @@ private class FFmpegCastMediaProcessor : CastMediaProcessor {
         durationMs: Long?,
         headers: Map<String, String>,
         options: MediaProcessOptions,
-        onProgress: (Int) -> Unit,
+        onProgress: (CastProcessProgress) -> Unit,
     ): Result<File> {
         output.parentFile?.mkdirs()
         if (output.exists()) output.delete()
@@ -127,10 +127,22 @@ private class FFmpegCastMediaProcessor : CastMediaProcessor {
                 },
                 { log -> Log.v(TAG, log.message) },
                 { statistics ->
-                    if (durationMs != null && durationMs > 0) {
+                    val percent = if (durationMs != null && durationMs > 0) {
                         val done = statistics.time.toLong()
-                        onProgress(((done * 100) / durationMs).coerceIn(0, 100).toInt())
+                        ((done * 100) / durationMs).coerceIn(0, 100).toInt()
+                    } else {
+                        -1
                     }
+                    onProgress(
+                        CastProcessProgress(
+                            percent = percent,
+                            // getSpeed() is "encode time / wall time", i.e. exactly playback-speed
+                            // multiplier already.
+                            speedMultiplier = statistics.speed.toFloat().takeIf { it > 0f },
+                            fps = statistics.videoFps.takeIf { it > 0f },
+                            outputBytes = statistics.size.takeIf { it > 0L },
+                        ),
+                    )
                 },
             )
             sessionId = session.sessionId

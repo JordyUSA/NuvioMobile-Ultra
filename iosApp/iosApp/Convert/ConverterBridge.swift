@@ -60,8 +60,14 @@ final class ConverterBridgeImpl: NSObject, ConverterBridge {
 
         converter.process(
             request: request,
-            onProgress: { percent in
-                ConverterHost.shared.onProgress(jobId: jobId, percent: Int32(percent))
+            onProgress: { progress in
+                ConverterHost.shared.onProgress(
+                    jobId: jobId,
+                    percent: Int32(progress.percent),
+                    etaMs: progress.etaMs,
+                    speedMultiplier: progress.speedMultiplier,
+                    fps: progress.fps
+                )
             },
             completion: { result in
                 switch result {

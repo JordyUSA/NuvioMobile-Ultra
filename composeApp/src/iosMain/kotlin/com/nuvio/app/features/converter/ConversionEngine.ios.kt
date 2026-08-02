@@ -15,14 +15,21 @@ internal actual object ConversionEngine {
     private class PendingJob(
         val id: String,
         val result: CompletableDeferred<Result<Unit>>,
-        val onProgress: (Int) -> Unit,
+        val onProgress: (ConversionProgress) -> Unit,
     )
 
     private val listener = object : ConverterCallbackListener {
-        override fun onProgress(jobId: String, percent: Int) {
+        override fun onProgress(jobId: String, percent: Int, etaMs: Long, speedMultiplier: Float, fps: Float) {
             // A late callback from a job that has already been cancelled must not move the bar for
             // whatever is running now, which is the whole reason the bridge carries a job id.
-            pending?.takeIf { it.id == jobId }?.onProgress(percent)
+            pending?.takeIf { it.id == jobId }?.onProgress?.invoke(
+                ConversionProgress(
+                    percent = percent,
+                    etaMs = etaMs.takeIf { it >= 0L },
+                    speedMultiplier = speedMultiplier.takeIf { it >= 0f },
+                    fps = fps.takeIf { it >= 0f },
+                ),
+            )
         }
 
         override fun onCompleted(jobId: String, success: Boolean, message: String?) {
@@ -46,7 +53,7 @@ internal actual object ConversionEngine {
         outputFileName: String,
         durationMs: Long?,
         preferHardwareEncoder: Boolean,
-        onProgress: (Int) -> Unit,
+        onProgress: (ConversionProgress) -> Unit,
     ): Result<ConversionOutput> {
         val bridge = ConverterHost.requireBridge()
             ?: return Result.failure(IllegalStateException("Converter bridge is not installed"))
