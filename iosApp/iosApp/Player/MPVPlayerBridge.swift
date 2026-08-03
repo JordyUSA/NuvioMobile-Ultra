@@ -106,6 +106,9 @@ final class MPVPlayerBridgeImpl: NSObject, NuvioPlayerBridge {
     func configureAudioOutput(audioOutput: String) {
         playerVC?.configureAudioOutput(audioOutput: audioOutput)
     }
+    func configureStreamCache(directory: String?) {
+        ensurePlayerViewController().configureStreamCache(directory: directory)
+    }
     func setPlaybackSpeed(speed: Float) { playerVC?.setSpeed(speed) }
     func setMuted(muted: Bool) { playerVC?.setMuted(muted) }
     func setVolumeBoost(multiplier: Float) { playerVC?.setVolumeBoost(multiplier) }
@@ -995,6 +998,22 @@ final class MPVPlayerViewController: UIViewController {
             resolvedAudioOutput = audioOutput
         }
         setStringProperty("ao", resolvedAudioOutput)
+    }
+
+    /// Spills mpv's demuxer cache to disk so a backgrounded player does not refetch what it
+    /// already had. Kotlin owns the directory and empties it on player exit, app start and app
+    /// background — mpv has no size ceiling of its own for `cache-on-disk`.
+    ///
+    /// mpv reads these when it opens a stream, so this has to land before the next load.
+    func configureStreamCache(directory: String?) {
+        guard mpv != nil else { return }
+        guard let directory, !directory.isEmpty else {
+            setStringProperty("cache-on-disk", "no")
+            return
+        }
+        setStringProperty("cache", "yes")
+        setStringProperty("cache-dir", directory)
+        setStringProperty("cache-on-disk", "yes")
     }
 
     func setSpeed(_ speed: Float) {

@@ -66,6 +66,8 @@ import com.nuvio.app.features.player.IosHardwareDecoderMode
 import com.nuvio.app.features.player.localizedLabel
 import com.nuvio.app.features.player.IosTargetPrimaries
 import com.nuvio.app.features.player.IosTargetTransfer
+import com.nuvio.app.core.i18n.localizedByteSize
+import com.nuvio.app.features.player.STREAM_CACHE_SIZE_VALUES_MB
 import com.nuvio.app.features.player.PlayerSettingsRepository
 import com.nuvio.app.features.player.STREAM_AUTO_PLAY_TIMEOUT_VALUES
 import com.nuvio.app.features.player.SubtitleBackgroundColorSwatches
@@ -334,6 +336,7 @@ private fun PlaybackSettingsSection(
     var showPlaybackEngineDialog by remember { mutableStateOf(false) }
     var showLibmpvVideoOutputDialog by remember { mutableStateOf(false) }
     var showDecoderPriorityDialog by remember { mutableStateOf(false) }
+    var showStreamCacheSizeDialog by remember { mutableStateOf(false) }
     var showHoldToSpeedValueDialog by remember { mutableStateOf(false) }
     var showIosAudioOutputDialog by remember { mutableStateOf(false) }
     var showIosHardwareDecoderDialog by remember { mutableStateOf(false) }
@@ -474,6 +477,37 @@ private fun PlaybackSettingsSection(
                         description = formatPlaybackSpeedLabel(holdToSpeedValue),
                         isTablet = isTablet,
                         onClick = { showHoldToSpeedValueDialog = true },
+                    )
+                }
+            }
+        }
+
+        SettingsSection(
+            title = stringResource(Res.string.settings_playback_section_stream_cache),
+            isTablet = isTablet,
+        ) {
+            // An external player does its own buffering in its own process; caching bytes this
+            // app never plays would just consume disk for nothing.
+            val streamCacheEnabled = !autoPlayPlayerSettings.externalPlayerEnabled
+            SettingsGroup(isTablet = isTablet) {
+                SettingsSwitchRow(
+                    title = stringResource(Res.string.settings_playback_stream_cache),
+                    description = stringResource(Res.string.settings_playback_stream_cache_description),
+                    checked = autoPlayPlayerSettings.streamCacheEnabled,
+                    enabled = streamCacheEnabled,
+                    isTablet = isTablet,
+                    onCheckedChange = PlayerSettingsRepository::setStreamCacheEnabled,
+                )
+                if (autoPlayPlayerSettings.streamCacheEnabled) {
+                    SettingsGroupDivider(isTablet = isTablet)
+                    SettingsNavigationRow(
+                        title = stringResource(Res.string.settings_playback_stream_cache_size),
+                        description = localizedByteSize(
+                            autoPlayPlayerSettings.streamCacheSizeMb.toLong() * 1024L * 1024L,
+                        ),
+                        enabled = streamCacheEnabled,
+                        isTablet = isTablet,
+                        onClick = { showStreamCacheSizeDialog = true },
                     )
                 }
             }
@@ -1488,6 +1522,17 @@ private fun PlaybackSettingsSection(
         )
     }
 
+    if (showStreamCacheSizeDialog) {
+        StreamCacheSizeDialog(
+            selectedSizeMb = autoPlayPlayerSettings.streamCacheSizeMb,
+            onSizeSelected = { sizeMb ->
+                PlayerSettingsRepository.setStreamCacheSizeMb(sizeMb)
+                showStreamCacheSizeDialog = false
+            },
+            onDismiss = { showStreamCacheSizeDialog = false },
+        )
+    }
+
     if (showReuseCacheDurationDialog) {
         ReuseCacheDurationDialog(
             selectedHours = streamReuseLastLinkCacheHours,
@@ -2038,6 +2083,96 @@ private fun LanguageSelectionDialog(
                                         )
                                     }
                                 }
+                                Box(
+                                    modifier = Modifier.size(24.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Check,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = stringResource(Res.string.settings_playback_dialog_close),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun StreamCacheSizeDialog(
+    selectedSizeMb: Int,
+    onSizeSelected: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    BasicAlertDialog(
+        onDismissRequest = onDismiss,
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = stringResource(Res.string.settings_playback_stream_cache_size),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = stringResource(Res.string.settings_playback_stream_cache_size_description),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    STREAM_CACHE_SIZE_VALUES_MB.forEach { sizeMb ->
+                        val isSelected = sizeMb == selectedSizeMb
+                        val containerColor = if (isSelected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                        }
+
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSizeSelected(sizeMb) },
+                            shape = RoundedCornerShape(12.dp),
+                            color = containerColor,
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = localizedByteSize(sizeMb.toLong() * 1024L * 1024L),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f),
+                                )
                                 Box(
                                     modifier = Modifier.size(24.dp),
                                     contentAlignment = Alignment.Center,

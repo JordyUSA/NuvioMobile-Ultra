@@ -46,6 +46,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.cache.CacheDataSink
+import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -178,6 +180,7 @@ actual fun PlatformPlayerSurface(
                 videoOutput = playerSettings.androidLibmpvVideoOutput,
                 hardwareDecodingEnabled = playerSettings.androidLibmpvHardwareDecodingEnabled && !isDirectMatroska,
                 yuv420pEnabled = playerSettings.androidLibmpvYuv420pEnabled,
+                streamCacheDirectory = resolveStreamCacheDirectory(playerSettings, sourceUrl),
                 onControllerReady = onControllerReady,
                 onSnapshot = onSnapshot,
                 onError = onError,
@@ -306,14 +309,21 @@ private fun ExoPlayerSurface(
         sanitizedSourceResponseHeaders,
         useYoutubeChunkedPlayback,
         externalSubtitles,
+        playerSettings.streamCacheEnabled,
+        playerSettings.streamCacheSizeMb,
     ) {
-        PlatformPlaybackDataSourceFactory.create(
+        val upstream = PlatformPlaybackDataSourceFactory.create(
             context = context,
             defaultRequestHeaders = sanitizedSourceHeaders,
             defaultResponseHeaders = sanitizedSourceResponseHeaders,
             useYoutubeChunkedPlayback = useYoutubeChunkedPlayback,
             useLongReadTimeout = isLoopbackPlaybackSource(sourceUrl),
             externalSubtitles = externalSubtitles,
+        )
+        upstream.withStreamCache(
+            enabled = playerSettings.streamCacheEnabled,
+            maxSizeBytes = playerSettings.streamCacheSizeMb.toLong() * 1024L * 1024L,
+            sourceUrl = sourceUrl,
         )
     }
 
@@ -900,6 +910,7 @@ private fun LibmpvPlayerSurface(
     videoOutput: AndroidLibmpvVideoOutput,
     hardwareDecodingEnabled: Boolean,
     yuv420pEnabled: Boolean,
+    streamCacheDirectory: String?,
     onControllerReady: (PlayerEngineController) -> Unit,
     onSnapshot: (PlayerPlaybackSnapshot) -> Unit,
     onError: (String?) -> Unit,
@@ -1063,6 +1074,7 @@ private fun LibmpvPlayerSurface(
                 videoOutput = videoOutput,
                 hardwareDecodingEnabled = hardwareDecodingEnabled,
                 yuv420pEnabled = yuv420pEnabled,
+                streamCacheDirectory = streamCacheDirectory,
             ).apply {
                 layoutParams = android.view.ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
                 keepScreenOn = false
@@ -1099,6 +1111,7 @@ private class NuvioLibmpvView(
     private val videoOutput: AndroidLibmpvVideoOutput,
     private val hardwareDecodingEnabled: Boolean,
     private val yuv420pEnabled: Boolean,
+    private val streamCacheDirectory: String?,
     attrs: AttributeSet? = null,
 ) : BaseMPVView(context, attrs) {
     private var currentSourceUrl: String? = null
@@ -1124,6 +1137,13 @@ private class NuvioLibmpvView(
         mpv.setOptionString("tls-ca-file", "${context.filesDir.path}/cacert.pem")
         mpv.setOptionString("demuxer-max-bytes", "${libmpvCacheBytes()}").logIfMpvError("demuxer-max-bytes")
         mpv.setOptionString("demuxer-max-back-bytes", "${libmpvCacheBytes()}").logIfMpvError("demuxer-max-back-bytes")
+        streamCacheDirectory?.let { cacheDirectory ->
+            // Spills the demuxer cache to disk so it survives the app being backgrounded,
+            // instead of being capped by the in-memory demuxer-max-bytes above.
+            mpv.setOptionString("cache", "yes").logIfMpvError("cache")
+            mpv.setOptionString("cache-on-disk", "yes").logIfMpvError("cache-on-disk")
+            mpv.setOptionString("cache-dir", cacheDirectory).logIfMpvError("cache-dir")
+        }
         mpv.setOptionString("vd-lavc-film-grain", "cpu")
         mpv.setPropertyBoolean("keep-open", true)
         mpv.setPropertyBoolean("input-default-bindings", true)
@@ -2136,6 +2156,55 @@ private fun diagnosticPlaybackSource(value: String): String = runCatching {
     val isLoopback = host == "127.0.0.1" || host == "localhost" || host == "::1"
     "scheme=${uri.scheme ?: "none"},host=${host.ifBlank { "none" }},port=${uri.port},loopback=$isLoopback"
 }.getOrDefault("unparseable")
+
+/**
+ * Wraps a data source chain so ExoPlayer reads and writes through the temporary stream cache.
+ *
+ * Skipped for loopback URLs: those are served by the in-process torrent/DLNA server off local
+ * disk already, so caching them would write a second copy of bytes that are not going anywhere.
+ *
+ * Writes go through [CacheDataSink] with a per-fragment cap so one long movie cannot produce a
+ * single file larger than the evictor can ever reclaim, and FLAG_IGNORE_CACHE_ON_ERROR keeps a
+ * failing cache from taking playback down with it — a cache fault should cost a re-buffer, not
+ * the video.
+ */
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun DataSource.Factory.withStreamCache(
+    enabled: Boolean,
+    maxSizeBytes: Long,
+    sourceUrl: String,
+): DataSource.Factory {
+    if (!enabled || isLoopbackPlaybackSource(sourceUrl)) return this
+    val cache = VideoStreamCache.acquire(maxSizeBytes) ?: return this
+
+    return CacheDataSource.Factory()
+        .setCache(cache)
+        .setUpstreamDataSourceFactory(this)
+        .setCacheWriteDataSinkFactory(
+            CacheDataSink.Factory()
+                .setCache(cache)
+                .setFragmentSize(StreamCacheFragmentSizeBytes),
+        )
+        .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+}
+
+private const val StreamCacheFragmentSizeBytes = 8L * 1024L * 1024L
+
+/**
+ * The directory mpv should spill its cache into, or null when caching is off for this source.
+ *
+ * mpv has no size ceiling for `cache-on-disk`, so the user's chosen limit cannot be enforced by
+ * mpv itself. It is enforced instead by the sweep on player exit, app start and app background,
+ * which is also what the setting promises: a temporary cache, not a growing one.
+ */
+private fun resolveStreamCacheDirectory(
+    playerSettings: PlayerSettingsUiState,
+    sourceUrl: String,
+): String? {
+    if (!playerSettings.streamCacheEnabled) return null
+    if (isLoopbackPlaybackSource(sourceUrl)) return null
+    return VideoStreamCache.directoryPath().takeIf { it.isNotBlank() }
+}
 
 private fun isLoopbackPlaybackSource(value: String): Boolean = runCatching {
     when (Uri.parse(value).host.orEmpty().lowercase()) {

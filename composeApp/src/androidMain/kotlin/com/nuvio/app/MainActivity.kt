@@ -42,6 +42,8 @@ import com.nuvio.app.features.home.HomeCatalogSettingsStorage
 import com.nuvio.app.features.mdblist.MdbListSettingsStorage
 import com.nuvio.app.features.notifications.EpisodeReleaseNotificationPlatform
 import com.nuvio.app.features.notifications.EpisodeReleaseNotificationsStorage
+import com.nuvio.app.features.player.VideoStreamCache
+import com.nuvio.app.features.player.VideoStreamCacheCleaner
 import com.nuvio.app.features.player.PlayerSettingsStorage
 import com.nuvio.app.features.player.PlayerTrackPreferenceStorage
 import com.nuvio.app.features.player.ExternalPlayerPlatform
@@ -104,6 +106,10 @@ class MainActivity : AppCompatActivity() {
         window.setBackgroundDrawableResource(R.color.nuvio_background)
         SyncClientIdentityStorage.initialize(applicationContext)
         AppCacheDirectories.initialize(applicationContext)
+        VideoStreamCache.initialize(applicationContext)
+        // Recovers the scratch space a crash or a force-stop left behind, which is the one
+        // path where neither the player-exit nor the app-background sweep ever ran.
+        VideoStreamCacheCleaner.clearAsync()
         // Cast initialisation is soft: on a device without Play services it leaves
         // CastPlatform.isSupported false and the UI omits the Cast button.
         CastPlatform.initialize(applicationContext)

@@ -112,6 +112,7 @@ import com.nuvio.app.core.format.formatReleaseDateForDisplay
 import com.nuvio.app.core.i18n.localizedByteUnit
 import com.nuvio.app.core.network.NetworkCondition
 import com.nuvio.app.core.network.NetworkStatusRepository
+import com.nuvio.app.core.sync.AppBackgroundMonitor
 import com.nuvio.app.core.sync.AppForegroundMonitor
 import com.nuvio.app.core.sync.ProfileSettingsSync
 import com.nuvio.app.core.sync.RealtimeSyncConfig
@@ -200,6 +201,7 @@ import com.nuvio.app.features.livetv.LiveTvScreen
 import com.nuvio.app.features.notifications.EpisodeReleaseNotificationsRepository
 import com.nuvio.app.features.p2p.P2pConsentDialog
 import com.nuvio.app.features.p2p.P2pSettingsRepository
+import com.nuvio.app.features.player.VideoStreamCacheCleaner
 import com.nuvio.app.features.player.PlayerLaunch
 import com.nuvio.app.features.player.PlayerLaunchStore
 import com.nuvio.app.features.player.PlayerRoute
@@ -1104,6 +1106,14 @@ private fun MainAppContent(
     LaunchedEffect(Unit) {
         AppForegroundMonitor.events().collect {
             NetworkStatusRepository.requestForegroundRefresh()
+        }
+    }
+
+    // The player-exit sweep covers the normal case; this covers leaving the app straight from
+    // the player, or the process being killed while backgrounded.
+    LaunchedEffect(Unit) {
+        AppBackgroundMonitor.events().collect {
+            VideoStreamCacheCleaner.clearAsync()
         }
     }
 

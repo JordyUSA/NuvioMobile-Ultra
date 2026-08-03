@@ -13,6 +13,21 @@ val STREAM_AUTO_PLAY_TIMEOUT_VALUES: List<Int> = listOf(
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, Int.MAX_VALUE
 )
 
+/** Selectable ceilings for the temporary streaming cache, in megabytes. */
+val STREAM_CACHE_SIZE_VALUES_MB: List<Int> = listOf(512, 1024, 2048, 4096, 8192)
+
+const val DEFAULT_STREAM_CACHE_SIZE_MB: Int = 2048
+
+/**
+ * Clamps a stored or user-supplied cache ceiling onto [STREAM_CACHE_SIZE_VALUES_MB].
+ *
+ * Values arrive from settings sync as well as from this device, so a payload written by a future
+ * build with a different set of options must still resolve to something this build can honour.
+ */
+fun snapToAllowedStreamCacheSizeMb(value: Int): Int =
+    STREAM_CACHE_SIZE_VALUES_MB.minByOrNull { abs(it.toLong() - value.toLong()) }
+        ?: DEFAULT_STREAM_CACHE_SIZE_MB
+
 /**
  * Snaps [value] to the nearest allowed timeout value in [STREAM_AUTO_PLAY_TIMEOUT_VALUES].
  * Ties break to the lower value. Negative values snap to 0.
@@ -58,6 +73,8 @@ data class PlayerSettingsUiState(
     val androidLibmpvHardwareDecodingEnabled: Boolean = true,
     val androidLibmpvYuv420pEnabled: Boolean = false,
     val androidMemorySafeBufferEnabled: Boolean = false,
+    val streamCacheEnabled: Boolean = false,
+    val streamCacheSizeMb: Int = DEFAULT_STREAM_CACHE_SIZE_MB,
     val decoderPriority: Int = 1,
     val mapDV7ToHevc: Boolean = false,
     val tunnelingEnabled: Boolean = false,
@@ -128,6 +145,8 @@ object PlayerSettingsRepository {
     private var androidLibmpvHardwareDecodingEnabled = true
     private var androidLibmpvYuv420pEnabled = false
     private var androidMemorySafeBufferEnabled = false
+    private var streamCacheEnabled = false
+    private var streamCacheSizeMb = DEFAULT_STREAM_CACHE_SIZE_MB
     private var decoderPriority = 1
     private var mapDV7ToHevc = false
     private var tunnelingEnabled = false
@@ -203,6 +222,8 @@ object PlayerSettingsRepository {
         androidLibmpvHardwareDecodingEnabled = true
         androidLibmpvYuv420pEnabled = false
         androidMemorySafeBufferEnabled = false
+        streamCacheEnabled = false
+        streamCacheSizeMb = DEFAULT_STREAM_CACHE_SIZE_MB
         decoderPriority = 1
         mapDV7ToHevc = false
         tunnelingEnabled = false
@@ -313,6 +334,10 @@ object PlayerSettingsRepository {
         androidLibmpvHardwareDecodingEnabled = PlayerSettingsStorage.loadAndroidLibmpvHardwareDecodingEnabled() ?: true
         androidLibmpvYuv420pEnabled = PlayerSettingsStorage.loadAndroidLibmpvYuv420pEnabled() ?: false
         androidMemorySafeBufferEnabled = PlayerSettingsStorage.loadAndroidMemorySafeBufferEnabled() ?: false
+        streamCacheEnabled = PlayerSettingsStorage.loadStreamCacheEnabled() ?: false
+        streamCacheSizeMb = PlayerSettingsStorage.loadStreamCacheSizeMb()
+            ?.let(::snapToAllowedStreamCacheSizeMb)
+            ?: DEFAULT_STREAM_CACHE_SIZE_MB
         decoderPriority = PlayerSettingsStorage.loadDecoderPriority() ?: 1
         mapDV7ToHevc = PlayerSettingsStorage.loadMapDV7ToHevc() ?: false
         tunnelingEnabled = PlayerSettingsStorage.loadTunnelingEnabled() ?: false
@@ -625,6 +650,23 @@ object PlayerSettingsRepository {
         androidMemorySafeBufferEnabled = enabled
         publish()
         PlayerSettingsStorage.saveAndroidMemorySafeBufferEnabled(enabled)
+    }
+
+    fun setStreamCacheEnabled(enabled: Boolean) {
+        ensureLoaded()
+        if (streamCacheEnabled == enabled) return
+        streamCacheEnabled = enabled
+        publish()
+        PlayerSettingsStorage.saveStreamCacheEnabled(enabled)
+    }
+
+    fun setStreamCacheSizeMb(sizeMb: Int) {
+        ensureLoaded()
+        val snapped = snapToAllowedStreamCacheSizeMb(sizeMb)
+        if (streamCacheSizeMb == snapped) return
+        streamCacheSizeMb = snapped
+        publish()
+        PlayerSettingsStorage.saveStreamCacheSizeMb(snapped)
     }
 
     fun setDecoderPriority(priority: Int) {
@@ -999,6 +1041,8 @@ object PlayerSettingsRepository {
             androidLibmpvHardwareDecodingEnabled = androidLibmpvHardwareDecodingEnabled,
             androidLibmpvYuv420pEnabled = androidLibmpvYuv420pEnabled,
             androidMemorySafeBufferEnabled = androidMemorySafeBufferEnabled,
+            streamCacheEnabled = streamCacheEnabled,
+            streamCacheSizeMb = streamCacheSizeMb,
             decoderPriority = decoderPriority,
             mapDV7ToHevc = mapDV7ToHevc,
             tunnelingEnabled = tunnelingEnabled,

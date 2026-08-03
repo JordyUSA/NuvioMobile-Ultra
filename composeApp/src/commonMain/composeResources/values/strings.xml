@@ -550,6 +550,12 @@
     <string name="settings_advanced_clear_cw_cache">Clear Continue Watching Cache</string>
     <string name="settings_advanced_clear_cw_cache_subtitle">Remove cached Continue Watching data and refresh watch progress</string>
     <string name="settings_advanced_clear_cw_cache_done">Cache cleared</string>
+    <string name="settings_playback_section_stream_cache">STREAM CACHE</string>
+    <string name="settings_playback_stream_cache">Cache Streaming Video</string>
+    <string name="settings_playback_stream_cache_description">Keep buffered video on disk so switching apps does not restart buffering. Cleared when you leave the player and when the app closes.</string>
+    <string name="settings_playback_stream_cache_size">Cache Limit</string>
+    <string name="settings_playback_stream_cache_size_description">Maximum disk space the temporary stream cache may use</string>
+    <string name="settings_playback_stream_cache_unavailable_external">Unavailable while an external player is selected</string>
     <string name="settings_advanced_image_cache">Poster &amp; Artwork Cache</string>
     <string name="settings_advanced_image_cache_subtitle">%1$s used. Cached artwork keeps your library visible offline.</string>
     <string name="settings_advanced_image_cache_empty">Nothing cached yet</string>

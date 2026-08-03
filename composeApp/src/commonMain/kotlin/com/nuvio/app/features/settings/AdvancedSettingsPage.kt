@@ -31,6 +31,7 @@ import com.nuvio.app.core.i18n.localizedByteSize
 import com.nuvio.app.core.ui.NuvioImageCache
 import com.nuvio.app.core.ui.NuvioTokens
 import com.nuvio.app.core.ui.nuvio
+import com.nuvio.app.features.player.VideoStreamCache
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.watchprogress.ContinueWatchingEnrichmentCache
 import com.nuvio.app.features.watchprogress.WatchProgressRepository
@@ -48,6 +49,9 @@ import nuvio.composeapp.generated.resources.settings_advanced_image_cache_subtit
 import nuvio.composeapp.generated.resources.settings_advanced_remember_last_profile
 import nuvio.composeapp.generated.resources.settings_advanced_remember_last_profile_description
 import nuvio.composeapp.generated.resources.settings_advanced_section_cache
+import nuvio.composeapp.generated.resources.settings_advanced_video_cache
+import nuvio.composeapp.generated.resources.settings_advanced_video_cache_empty
+import nuvio.composeapp.generated.resources.settings_advanced_video_cache_subtitle
 import nuvio.composeapp.generated.resources.settings_advanced_section_diagnostics
 import nuvio.composeapp.generated.resources.settings_advanced_section_startup
 import nuvio.composeapp.generated.resources.settings_advanced_sentry_reports
@@ -139,6 +143,17 @@ internal fun LazyListScope.advancedSettingsContent(
                     },
                     readSizeBytes = { NuvioImageCache.sizeBytes() },
                     onClear = { NuvioImageCache.clear() },
+                )
+                SettingsGroupDivider(isTablet = isTablet)
+                CacheUsageRow(
+                    title = stringResource(Res.string.settings_advanced_video_cache),
+                    emptyDescription = stringResource(Res.string.settings_advanced_video_cache_empty),
+                    isTablet = isTablet,
+                    describeUsage = { usage ->
+                        stringResource(Res.string.settings_advanced_video_cache_subtitle, usage)
+                    },
+                    readSizeBytes = { VideoStreamCache.sizeBytes() },
+                    onClear = { VideoStreamCache.clear() },
                 )
                 SettingsGroupDivider(isTablet = isTablet)
                 val scope = rememberCoroutineScope()

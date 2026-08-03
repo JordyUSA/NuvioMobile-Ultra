@@ -287,6 +287,11 @@ actual fun PlatformPlayerSurface(
     // Load file and set initial state
     LaunchedEffect(bridge, sourceUrl, sourceAudioUrl, sourceHeaders, externalSubtitles) {
         bridge.applyIosVideoOutputSettings(latestPlayerSettings.value)
+        // Applied before the load: mpv only reads its cache options when it opens a stream.
+        bridge.configureStreamCache(
+            directory = VideoStreamCache.directoryPath()
+                .takeIf { latestPlayerSettings.value.streamCacheEnabled && it.isNotBlank() },
+        )
         bridge.loadFileWithAudio(
             videoUrl = sourceUrl,
             audioUrl = sourceAudioUrl,
