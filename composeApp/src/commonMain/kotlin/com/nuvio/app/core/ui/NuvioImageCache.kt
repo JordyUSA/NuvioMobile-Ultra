@@ -3,8 +3,6 @@ package com.nuvio.app.core.ui
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.disk.DiskCache
-import coil3.disk.directory
-import coil3.memory.MemoryCache
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -61,11 +59,9 @@ object NuvioImageCache {
             .crossfade(true)
             .diskCachePolicy(CachePolicy.ENABLED)
             .memoryCachePolicy(CachePolicy.ENABLED)
-            .memoryCache {
-                MemoryCache.Builder()
-                    .maxSizePercent(context)
-                    .build()
-            }
+            // The memory cache is deliberately left at Coil's default, which sizes itself as a
+            // share of what the platform will give the app. Naming a fixed number here would be
+            // worse on both platforms, and MemoryCache's percentage builder is Android-only.
             .diskCache {
                 DiskCache.Builder()
                     .directory(AppCacheDirectories.images().toPath())
