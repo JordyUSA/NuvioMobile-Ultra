@@ -178,8 +178,8 @@ fun NuvioPosterCard(
             contentAlignment = Alignment.Center,
         ) {
             if (imageUrl != null) {
-                AsyncImage(
-                    model = imageUrl,
+                NuvioAsyncImage(
+                    imageUrl = imageUrl,
                     contentDescription = title,
                     modifier = Modifier.matchParentSize(),
                     contentScale = ContentScale.Crop,

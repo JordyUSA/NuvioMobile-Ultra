@@ -550,6 +550,14 @@
     <string name="settings_advanced_clear_cw_cache">Clear Continue Watching Cache</string>
     <string name="settings_advanced_clear_cw_cache_subtitle">Remove cached Continue Watching data and refresh watch progress</string>
     <string name="settings_advanced_clear_cw_cache_done">Cache cleared</string>
+    <string name="settings_advanced_image_cache">Poster &amp; Artwork Cache</string>
+    <string name="settings_advanced_image_cache_subtitle">%1$s used. Cached artwork keeps your library visible offline.</string>
+    <string name="settings_advanced_image_cache_empty">Nothing cached yet</string>
+    <string name="settings_advanced_video_cache">Video Cache</string>
+    <string name="settings_advanced_video_cache_subtitle">%1$s used by temporarily cached streams</string>
+    <string name="settings_advanced_video_cache_empty">Nothing cached yet</string>
+    <string name="settings_advanced_cache_clear_action">Tap to clear</string>
+    <string name="settings_advanced_cache_cleared">Cleared</string>
     <string name="settings_licenses_attributions_section_app">APP LICENSE</string>
     <string name="settings_licenses_attributions_section_data">DATA &amp; SERVICES</string>
     <string name="settings_licenses_attributions_section_playback">PLAYBACK LICENSE</string>

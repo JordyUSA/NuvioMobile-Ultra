@@ -2,6 +2,7 @@ package com.nuvio.app.features.profiles
 
 import co.touchlab.kermit.Logger
 import com.nuvio.app.core.network.SupabaseProvider
+import com.nuvio.app.core.ui.NuvioImageCache
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,6 +58,7 @@ object AvatarRepository {
 
         _avatars.value = items
         loaded = true
+        prefetchAvatarImages(items)
     }
 
     private suspend fun doFetch() {
@@ -70,6 +72,7 @@ object AvatarRepository {
             )
             _avatars.value = activeItems
             loaded = true
+            prefetchAvatarImages(activeItems)
             AvatarStorage.savePayload(
                 json.encodeToString(
                     StoredAvatarCatalogPayload(items = activeItems),
@@ -80,5 +83,17 @@ object AvatarRepository {
         }.also {
             fetchInFlight = false
         }
+    }
+
+    /**
+     * The catalog JSON was already cached, but the avatar images themselves were not, so profile
+     * selection came up blank on a cold offline launch — the one screen the user cannot get past.
+     */
+    private fun prefetchAvatarImages(items: List<AvatarCatalogItem>) {
+        NuvioImageCache.prefetch(
+            items.mapNotNull { item ->
+                item.storagePath.takeIf { it.isNotBlank() }?.let(::avatarStorageUrl)
+            },
+        )
     }
 }

@@ -99,12 +99,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
-import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import coil3.compose.setSingletonImageLoaderFactory
-import coil3.request.CachePolicy
-import coil3.request.crossfade
-import coil3.svg.SvgDecoder
 import com.nuvio.app.core.build.AppFeaturePolicy
 import com.nuvio.app.core.auth.AuthRepository
 import com.nuvio.app.core.auth.AuthState
@@ -122,6 +118,7 @@ import com.nuvio.app.core.sync.RealtimeSyncConfig
 import com.nuvio.app.core.sync.RealtimeSyncInvalidationService
 import com.nuvio.app.core.sync.SyncManager
 import com.nuvio.app.core.ui.LocalNuvioNavBarScrollState
+import com.nuvio.app.core.ui.NuvioImageCache
 import com.nuvio.app.core.ui.NuvioClassicNavigationBar
 import com.nuvio.app.core.ui.NuvioNavigationBar
 import com.nuvio.app.core.ui.NuvioContinueWatchingActionSheet
@@ -133,7 +130,6 @@ import com.nuvio.app.core.ui.PosterZoomOverlayAction
 import com.nuvio.app.core.ui.PlatformBackHandler
 import com.nuvio.app.core.ui.AppSystemUiController
 import com.nuvio.app.core.ui.platformExitApp
-import com.nuvio.app.core.ui.configurePlatformImageLoader
 import com.nuvio.app.core.ui.NuvioToastHost
 import com.nuvio.app.core.ui.NuvioToastController
 import com.nuvio.app.core.ui.NuvioFloatingPrompt
@@ -225,6 +221,7 @@ import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.profiles.ProfileSelectionScreen
 import com.nuvio.app.features.profiles.ProfileSwitcherTab
 import com.nuvio.app.features.profiles.parseHexColor
+import com.nuvio.app.features.profiles.normalizedAvatarUrl
 import com.nuvio.app.features.profiles.profileAvatarImageUrl
 import com.nuvio.app.features.profiles.profileBackgroundImageUrl
 import com.nuvio.app.features.search.SearchScreen
@@ -460,17 +457,7 @@ private enum class ProfileEditReturnTarget {
 @Composable
 @Preview
 fun App() {
-    setSingletonImageLoaderFactory { context ->
-        ImageLoader.Builder(context)
-            .crossfade(true)
-            .diskCachePolicy(CachePolicy.ENABLED)
-            .memoryCachePolicy(CachePolicy.ENABLED)
-            .components {
-                add(SvgDecoder.Factory())
-            }
-            .configurePlatformImageLoader()
-            .build()
-    }
+    setSingletonImageLoaderFactory { context -> NuvioImageCache.build(context) }
     val selectedTheme by remember {
         ThemeSettingsRepository.ensureLoaded()
         ThemeSettingsRepository.selectedTheme
@@ -507,6 +494,19 @@ fun App() {
         val pendingCrashReport by remember {
             CrashDiagnostics.pendingReport
         }.collectAsStateWithLifecycle()
+
+        // Custom avatars and backgrounds are per-profile URLs the catalog prefetch does not
+        // cover, and profile selection is the first screen of a cold offline launch.
+        LaunchedEffect(profileState.profiles) {
+            NuvioImageCache.prefetch(
+                profileState.profiles.flatMap { profile ->
+                    listOfNotNull(
+                        normalizedAvatarUrl(profile.avatarUrl),
+                        profileBackgroundImageUrl(profile),
+                    )
+                },
+            )
+        }
 
         LaunchedEffect(
             profileState.activeProfile?.profileIndex,

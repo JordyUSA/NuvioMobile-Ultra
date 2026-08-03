@@ -47,6 +47,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import com.nuvio.app.core.ui.NuvioAsyncImage
 import com.nuvio.app.core.ui.NuvioLoadingIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -79,7 +80,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil3.compose.AsyncImage
 import com.nuvio.app.core.i18n.localizedMonthName
 import com.nuvio.app.core.i18n.localizedShortMonthName
 import com.nuvio.app.core.i18n.localizedByteSize
@@ -1113,8 +1113,8 @@ private fun LibraryActiveDownloadCard(
             contentAlignment = Alignment.Center,
         ) {
             if (!artwork.isNullOrBlank()) {
-                AsyncImage(
-                    model = artwork,
+                NuvioAsyncImage(
+                    imageUrl = artwork,
                     contentDescription = item.downloadDisplayTitle(),
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
@@ -2636,8 +2636,8 @@ private fun LibraryCalendarEventArtwork(event: LibraryCalendarEvent) {
         contentAlignment = Alignment.Center,
     ) {
         if (!event.imageUrl.isNullOrBlank()) {
-            AsyncImage(
-                model = event.imageUrl,
+            NuvioAsyncImage(
+                imageUrl = event.imageUrl,
                 contentDescription = event.title,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
