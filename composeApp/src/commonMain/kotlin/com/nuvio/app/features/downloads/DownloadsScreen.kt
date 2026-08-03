@@ -499,7 +499,7 @@ private fun statusText(item: DownloadItem): String {
             Res.string.downloads_status_completed,
             formatBytes(item.totalBytes ?: item.downloadedBytes),
         )
-        DownloadStatus.Failed -> item.errorMessage ?: stringResource(Res.string.downloads_status_failed)
+        DownloadStatus.Failed -> item.failureText ?: stringResource(Res.string.downloads_status_failed)
     }
 }
 

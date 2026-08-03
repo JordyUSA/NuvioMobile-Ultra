@@ -4342,7 +4342,7 @@ private fun downloadActionOverlayStatus(item: DownloadItem): String {
     return when (item.status) {
         DownloadStatus.Downloading -> stringResource(Res.string.downloads_status_downloading, size)
         DownloadStatus.Paused -> stringResource(Res.string.downloads_status_paused, size)
-        DownloadStatus.Failed -> item.errorMessage ?: stringResource(Res.string.downloads_status_failed)
+        DownloadStatus.Failed -> item.failureText ?: stringResource(Res.string.downloads_status_failed)
         DownloadStatus.Completed -> stringResource(
             Res.string.downloads_status_completed,
             formatDownloadOverlayBytes(item.totalBytes ?: item.downloadedBytes),

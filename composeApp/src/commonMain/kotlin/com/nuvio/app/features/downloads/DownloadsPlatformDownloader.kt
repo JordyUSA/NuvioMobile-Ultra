@@ -17,7 +17,7 @@ internal expect object DownloadsPlatformDownloader {
         request: DownloadPlatformRequest,
         onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
         onSuccess: (localFileUri: String, totalBytes: Long?) -> Unit,
-        onFailure: (message: String) -> Unit,
+        onFailure: (reason: DownloadFailureReason, detail: String) -> Unit,
     ): DownloadsTaskHandle
 
     fun removeFile(localFileUri: String?): Boolean

@@ -550,6 +550,15 @@
     <string name="settings_advanced_clear_cw_cache">Clear Continue Watching Cache</string>
     <string name="settings_advanced_clear_cw_cache_subtitle">Remove cached Continue Watching data and refresh watch progress</string>
     <string name="settings_advanced_clear_cw_cache_done">Cache cleared</string>
+    <string name="downloads_failure_no_connection">No internet connection</string>
+    <string name="downloads_failure_timeout">The server stopped responding</string>
+    <string name="downloads_failure_link_expired">This link has expired — pick the stream again</string>
+    <string name="downloads_failure_not_found">The file is no longer available</string>
+    <string name="downloads_failure_server_error">The server had a problem</string>
+    <string name="downloads_failure_out_of_storage">Not enough storage on this device</string>
+    <string name="downloads_failure_file_write_failed">Couldn\'t save the file</string>
+    <string name="downloads_failure_unsupported">This stream can\'t be downloaded</string>
+    <string name="downloads_failure_unknown">Download failed</string>
     <string name="settings_playback_section_stream_cache">STREAM CACHE</string>
     <string name="settings_playback_stream_cache">Cache Streaming Video</string>
     <string name="settings_playback_stream_cache_description">Keep buffered video on disk so switching apps does not restart buffering. Cleared when you leave the player and when the app closes.</string>

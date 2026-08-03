@@ -220,6 +220,8 @@ object DownloadsRepository {
             current.copy(
                 status = DownloadStatus.Paused,
                 downloadSpeedBytesPerSecond = 0L,
+                // Drop the sample so resuming does not measure a speed across the pause.
+                statsUpdatedAtEpochMs = 0L,
                 updatedAtEpochMs = DownloadsClock.nowEpochMs(),
                 errorMessage = null,
             )
@@ -242,8 +244,11 @@ object DownloadsRepository {
         val reset = item.copy(
             status = DownloadStatus.Downloading,
             errorMessage = null,
+            failureReason = null,
+            errorDetail = null,
             localFileUri = null,
             downloadSpeedBytesPerSecond = 0L,
+            statsUpdatedAtEpochMs = 0L,
             updatedAtEpochMs = DownloadsClock.nowEpochMs(),
         )
 
@@ -313,6 +318,7 @@ object DownloadsRepository {
                     item.copy(
                         status = DownloadStatus.Paused,
                         downloadSpeedBytesPerSecond = 0L,
+                        statsUpdatedAtEpochMs = 0L,
                         errorMessage = null,
                     )
                 } else {
@@ -333,6 +339,12 @@ object DownloadsRepository {
         }
     }
 
+    /**
+     * How often the speed, size and ETA text is recomputed. The underlying progress emissions
+     * stay at their platform cadence so the bar keeps animating smoothly.
+     */
+    private const val DownloadStatsSampleIntervalMs = 1_000L
+
     private fun startDownload(item: DownloadItem) {
         val request = DownloadPlatformRequest(
             sourceUrl = item.sourceUrl,
@@ -349,30 +361,55 @@ object DownloadsRepository {
                     } else {
                         val now = DownloadsClock.nowEpochMs()
                         val nextDownloadedBytes = downloadedBytes.coerceAtLeast(0L)
-                        val byteDelta = (nextDownloadedBytes - current.downloadedBytes).coerceAtLeast(0L)
-                        val elapsedMs = (now - current.updatedAtEpochMs).coerceAtLeast(0L)
-                        val instantSpeed = if (byteDelta > 0L && elapsedMs > 0L) {
-                            (byteDelta * 1_000L) / elapsedMs
-                        } else {
-                            null
-                        }
-                        val smoothedSpeed = when {
-                            instantSpeed == null -> current.downloadSpeedBytesPerSecond
-                            current.downloadSpeedBytesPerSecond > 0L ->
-                                (
-                                    current.downloadSpeedBytesPerSecond.toDouble() * 0.65 +
-                                        instantSpeed.toDouble() * 0.35
-                                    ).toLong()
-                            else -> instantSpeed
-                        }.coerceAtLeast(0L)
+                        val sampleElapsedMs = (now - current.statsUpdatedAtEpochMs).coerceAtLeast(0L)
 
-                        current.copy(
+                        // The bar tracks downloadedBytes on every emission; speed, size and ETA
+                        // are recomputed only once a second, because text that changes twice a
+                        // second is text nobody can read.
+                        val takeStatsSample = current.statsUpdatedAtEpochMs <= 0L ||
+                            sampleElapsedMs >= DownloadStatsSampleIntervalMs
+
+                        val progressed = current.copy(
                             downloadedBytes = nextDownloadedBytes,
                             totalBytes = totalBytes?.takeIf { it > 0L },
-                            downloadSpeedBytesPerSecond = smoothedSpeed,
                             updatedAtEpochMs = now,
                             errorMessage = null,
+                            failureReason = null,
+                            errorDetail = null,
                         )
+
+                        if (!takeStatsSample) {
+                            progressed
+                        } else if (current.statsUpdatedAtEpochMs <= 0L) {
+                            // First emission of this run: establish the baseline only. Measuring
+                            // against a zero timestamp would report a speed of roughly nothing.
+                            progressed.copy(
+                                statsBytes = nextDownloadedBytes,
+                                statsUpdatedAtEpochMs = now,
+                            )
+                        } else {
+                            val byteDelta = (nextDownloadedBytes - current.statsBytes).coerceAtLeast(0L)
+                            val instantSpeed = if (byteDelta > 0L && sampleElapsedMs > 0L) {
+                                (byteDelta * 1_000L) / sampleElapsedMs
+                            } else {
+                                null
+                            }
+                            val smoothedSpeed = when {
+                                instantSpeed == null -> current.downloadSpeedBytesPerSecond
+                                current.downloadSpeedBytesPerSecond > 0L ->
+                                    (
+                                        current.downloadSpeedBytesPerSecond.toDouble() * 0.65 +
+                                            instantSpeed.toDouble() * 0.35
+                                        ).toLong()
+                                else -> instantSpeed
+                            }.coerceAtLeast(0L)
+
+                            progressed.copy(
+                                downloadSpeedBytesPerSecond = smoothedSpeed,
+                                statsBytes = nextDownloadedBytes,
+                                statsUpdatedAtEpochMs = now,
+                            )
+                        }
                     }
                 }
             },
@@ -399,7 +436,7 @@ object DownloadsRepository {
                     )
                 }
             },
-            onFailure = { message ->
+            onFailure = { reason, detail ->
                 activeHandles.remove(item.id)
                 mutateItem(item.id) { current ->
                     if (current.status != DownloadStatus.Downloading) {
@@ -408,7 +445,9 @@ object DownloadsRepository {
                         current.copy(
                             status = DownloadStatus.Failed,
                             downloadSpeedBytesPerSecond = 0L,
-                            errorMessage = message.ifBlank { runBlocking { getString(Res.string.download_failed) } },
+                            errorMessage = reason.localizedText(),
+                            failureReason = reason,
+                            errorDetail = detail.takeIf { it.isNotBlank() },
                             updatedAtEpochMs = DownloadsClock.nowEpochMs(),
                         )
                     }

@@ -55,7 +55,19 @@ data class DownloadItem(
     val downloadedBytes: Long = 0L,
     val totalBytes: Long? = null,
     val downloadSpeedBytesPerSecond: Long = 0L,
+    /**
+     * [downloadedBytes] as of the last one-second stats sample, and when that sample was taken.
+     *
+     * The progress bar wants every update it can get; the speed, size and ETA text does not —
+     * numbers that change five times a second are unreadable. Splitting the two lets the bar
+     * animate off [downloadedBytes] while the text is derived from this slower sample.
+     */
+    val statsBytes: Long = 0L,
+    val statsUpdatedAtEpochMs: Long = 0L,
     val errorMessage: String? = null,
+    val failureReason: DownloadFailureReason? = null,
+    /** The raw platform error, kept for the media-info sheet rather than shown in the list. */
+    val errorDetail: String? = null,
     val createdAtEpochMs: Long,
     val updatedAtEpochMs: Long,
 ) {
@@ -76,14 +88,26 @@ data class DownloadItem(
                 .coerceIn(0f, 1f)
         }
 
+    /** Bytes as shown in text. Falls back to the live count before the first sample lands. */
+    val displayedBytes: Long
+        get() = statsBytes.takeIf { it > 0L } ?: downloadedBytes
+
     val estimatedRemainingSeconds: Long?
         get() {
             if (status != DownloadStatus.Downloading) return null
             val total = totalBytes?.takeIf { it > 0L } ?: return null
             val speed = downloadSpeedBytesPerSecond.takeIf { it > 0L } ?: return null
-            val remainingBytes = (total - downloadedBytes).coerceAtLeast(0L)
+            val remainingBytes = (total - displayedBytes).coerceAtLeast(0L)
             if (remainingBytes <= 0L) return 0L
             return (remainingBytes + speed - 1L) / speed
+        }
+
+    /** The one-line reason a failed download stopped. */
+    val failureText: String?
+        get() = when (status) {
+            DownloadStatus.Failed -> failureReason?.localizedText()
+                ?: errorMessage?.takeIf { it.isNotBlank() }
+            else -> null
         }
 
     val logicalContentKey: String
@@ -197,7 +221,7 @@ internal val downloadSeriesEpisodeComparator: Comparator<DownloadItem> =
         .thenBy { it.id }
 
 internal fun DownloadItem.downloadSizeLabel(): String {
-    val downloaded = formatDownloadBytes(downloadedBytes)
+    val downloaded = formatDownloadBytes(displayedBytes)
     val total = totalBytes?.takeIf { it > 0L }?.let(::formatDownloadBytes)
     return if (total != null) "$downloaded / $total" else downloaded
 }

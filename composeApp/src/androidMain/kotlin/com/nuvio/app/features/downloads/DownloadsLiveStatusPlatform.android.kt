@@ -102,7 +102,7 @@ internal actual object DownloadsLiveStatusPlatform {
                 progressPercent = progressPercent(item),
                 downloadedBucket = item.downloadedBytes / (512L * 1024L),
                 totalBytes = item.totalBytes,
-                errorMessage = item.errorMessage,
+                errorMessage = item.failureText,
             )
 
             val existingState = lastRenderStateById[item.id]
@@ -373,7 +373,7 @@ internal actual object DownloadsLiveStatusPlatform {
             }
 
             DownloadStatus.Paused -> runBlocking { getString(Res.string.downloads_live_paused, detail) }
-            DownloadStatus.Failed -> item.errorMessage?.takeIf { it.isNotBlank() } ?: runBlocking { getString(Res.string.downloads_live_failed) }
+            DownloadStatus.Failed -> item.failureText?.takeIf { it.isNotBlank() } ?: runBlocking { getString(Res.string.downloads_live_failed) }
             DownloadStatus.Completed -> runBlocking { getString(Res.string.downloads_live_completed) }
         }
     }
