@@ -550,6 +550,12 @@
     <string name="settings_advanced_clear_cw_cache">Clear Continue Watching Cache</string>
     <string name="settings_advanced_clear_cw_cache_subtitle">Remove cached Continue Watching data and refresh watch progress</string>
     <string name="settings_advanced_clear_cw_cache_done">Cache cleared</string>
+    <string name="settings_playback_unavailable_external_player">Unavailable while an external player is selected</string>
+    <string name="settings_playback_unavailable_external_audio">The external player picks its own audio track</string>
+    <string name="settings_playback_unavailable_external_subtitle_forward">Turn on \"Forward subtitles\" to choose subtitle languages for the external player</string>
+    <string name="settings_playback_unavailable_libmpv_engine">Only applies when the playback engine is libmpv</string>
+    <string name="settings_playback_unavailable_exoplayer_engine">Only applies when the playback engine is ExoPlayer</string>
+    <string name="settings_meta_tab_group_full">Greyed-out groups already hold three sections</string>
     <string name="settings_playback_subtitle_edge_style">Edge Style</string>
     <string name="settings_playback_subtitle_edge_style_description">How subtitles are separated from the picture behind them</string>
     <string name="subtitle_edge_style_none">None</string>

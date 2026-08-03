@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material3.BasicAlertDialog
 import com.nuvio.app.core.ui.NuvioLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -233,6 +234,7 @@ private fun SettingsSliderRow(
     step: Int,
     isTablet: Boolean,
     enabled: Boolean = true,
+    disabledReason: String? = null,
     onValueChange: (Int) -> Unit,
 ) {
     val horizontalPadding = if (isTablet) 20.dp else 16.dp
@@ -241,10 +243,13 @@ private fun SettingsSliderRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = horizontalPadding, vertical = 10.dp)
-            .alpha(if (enabled) 1f else 0.55f),
+            .padding(horizontal = horizontalPadding, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        Column(
+            modifier = Modifier.alpha(if (enabled) 1f else 0.55f),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -273,6 +278,25 @@ private fun SettingsSliderRow(
             ),
             modifier = Modifier.fillMaxWidth(),
         )
+        }
+        if (!enabled && !disabledReason.isNullOrBlank()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Lock,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    text = disabledReason,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
@@ -340,6 +364,17 @@ private fun PlaybackSettingsSection(
     var showDecoderPriorityDialog by remember { mutableStateOf(false) }
     var showStreamCacheSizeDialog by remember { mutableStateOf(false) }
     var showSubtitleEdgeStyleDialog by remember { mutableStateOf(false) }
+
+    // Every greyed-out control in this screen has a knowable reason; these are them. The
+    // conditions were previously expressed only as booleans, so the screen dimmed rows and left
+    // the user to guess.
+    val externalPlayerDisabledReason = stringResource(Res.string.settings_playback_unavailable_external_player)
+    val audioLanguageDisabledReason = stringResource(Res.string.settings_playback_unavailable_external_audio)
+    val subtitleLanguageDisabledReason =
+        stringResource(Res.string.settings_playback_unavailable_external_subtitle_forward)
+    val subtitleRenderingDisabledReason = stringResource(Res.string.settings_playback_subtitle_unavailable_external)
+    val libmpvEngineDisabledReason = stringResource(Res.string.settings_playback_unavailable_libmpv_engine)
+    val exoPlayerEngineDisabledReason = stringResource(Res.string.settings_playback_unavailable_exoplayer_engine)
     var showHoldToSpeedValueDialog by remember { mutableStateOf(false) }
     var showIosAudioOutputDialog by remember { mutableStateOf(false) }
     var showIosHardwareDecoderDialog by remember { mutableStateOf(false) }
@@ -452,6 +487,7 @@ private fun PlaybackSettingsSection(
                     description = stringResource(Res.string.settings_playback_touch_gestures_description),
                     checked = touchGesturesEnabled,
                     enabled = !autoPlayPlayerSettings.externalPlayerEnabled,
+                    disabledReason = externalPlayerDisabledReason,
                     isTablet = isTablet,
                     onCheckedChange = PlayerSettingsRepository::setTouchGesturesEnabled,
                 )
@@ -461,6 +497,7 @@ private fun PlaybackSettingsSection(
                     description = stringResource(Res.string.settings_playback_remember_brightness_description),
                     checked = autoPlayPlayerSettings.rememberPlayerBrightnessEnabled,
                     enabled = !autoPlayPlayerSettings.externalPlayerEnabled,
+                    disabledReason = externalPlayerDisabledReason,
                     isTablet = isTablet,
                     onCheckedChange = PlayerSettingsRepository::setRememberPlayerBrightnessEnabled,
                 )
@@ -470,6 +507,7 @@ private fun PlaybackSettingsSection(
                     description = stringResource(Res.string.settings_playback_hold_to_speed_description),
                     checked = holdToSpeedEnabled,
                     enabled = !autoPlayPlayerSettings.externalPlayerEnabled,
+                    disabledReason = externalPlayerDisabledReason,
                     isTablet = isTablet,
                     onCheckedChange = PlayerSettingsRepository::setHoldToSpeedEnabled,
                 )
@@ -498,6 +536,7 @@ private fun PlaybackSettingsSection(
                     description = stringResource(Res.string.settings_playback_stream_cache_description),
                     checked = autoPlayPlayerSettings.streamCacheEnabled,
                     enabled = streamCacheEnabled,
+                    disabledReason = externalPlayerDisabledReason,
                     isTablet = isTablet,
                     onCheckedChange = PlayerSettingsRepository::setStreamCacheEnabled,
                 )
@@ -509,6 +548,7 @@ private fun PlaybackSettingsSection(
                             autoPlayPlayerSettings.streamCacheSizeMb.toLong() * 1024L * 1024L,
                         ),
                         enabled = streamCacheEnabled,
+                        disabledReason = externalPlayerDisabledReason,
                         isTablet = isTablet,
                         onClick = { showStreamCacheSizeDialog = true },
                     )
@@ -541,6 +581,7 @@ private fun PlaybackSettingsSection(
                         else -> languageLabelForCode(preferredAudioLanguage)
                     },
                     enabled = audioLanguageEnabled,
+                    disabledReason = audioLanguageDisabledReason,
                     isTablet = isTablet,
                     onClick = { showPreferredAudioDialog = true },
                 )
@@ -549,6 +590,7 @@ private fun PlaybackSettingsSection(
                     title = stringResource(Res.string.settings_playback_secondary_audio_language),
                     description = languageLabelForCode(secondaryPreferredAudioLanguage),
                     enabled = audioLanguageEnabled,
+                    disabledReason = audioLanguageDisabledReason,
                     isTablet = isTablet,
                     onClick = { showSecondaryAudioDialog = true },
                 )
@@ -562,6 +604,7 @@ private fun PlaybackSettingsSection(
                         else -> languageLabelForCode(preferredSubtitleLanguage)
                     },
                     enabled = subtitleLanguageEnabled,
+                    disabledReason = subtitleLanguageDisabledReason,
                     isTablet = isTablet,
                     onClick = { showPreferredSubtitleDialog = true },
                 )
@@ -570,6 +613,7 @@ private fun PlaybackSettingsSection(
                     title = stringResource(Res.string.settings_playback_secondary_subtitle_language),
                     description = languageLabelForCode(secondaryPreferredSubtitleLanguage),
                     enabled = subtitleLanguageEnabled,
+                    disabledReason = subtitleLanguageDisabledReason,
                     isTablet = isTablet,
                     onClick = { showSecondarySubtitleDialog = true },
                 )
@@ -579,6 +623,7 @@ private fun PlaybackSettingsSection(
                     description = stringResource(Res.string.settings_playback_subtitle_use_forced_description),
                     checked = autoPlayPlayerSettings.subtitleStyle.useForcedSubtitles,
                     enabled = otherSubtitleOptionsEnabled,
+                    disabledReason = externalPlayerDisabledReason,
                     isTablet = isTablet,
                     onCheckedChange = { enabled ->
                         PlayerSettingsRepository.setSubtitleStyle(
@@ -592,6 +637,7 @@ private fun PlaybackSettingsSection(
                     description = stringResource(Res.string.settings_playback_subtitle_show_preferred_only_description),
                     checked = autoPlayPlayerSettings.subtitleStyle.showOnlyPreferredLanguages,
                     enabled = otherSubtitleOptionsEnabled,
+                    disabledReason = externalPlayerDisabledReason,
                     isTablet = isTablet,
                     onCheckedChange = { enabled ->
                         PlayerSettingsRepository.setSubtitleStyle(
@@ -604,6 +650,7 @@ private fun PlaybackSettingsSection(
                     title = stringResource(Res.string.settings_playback_addon_subtitle_startup_mode),
                     description = addonSubtitleStartupModeLabel(autoPlayPlayerSettings.addonSubtitleStartupMode),
                     enabled = otherSubtitleOptionsEnabled,
+                    disabledReason = externalPlayerDisabledReason,
                     isTablet = isTablet,
                     onClick = { showAddonSubtitleStartupModeDialog = true },
                 )
@@ -625,6 +672,7 @@ private fun PlaybackSettingsSection(
                     step = SubtitleStyleState.FONT_SIZE_STEP_SP,
                     isTablet = isTablet,
                     enabled = subtitleRenderingEnabled,
+                    disabledReason = subtitleRenderingDisabledReason,
                     onValueChange = { value ->
                         PlayerSettingsRepository.setSubtitleStyle(subtitleStyle.copy(fontSizeSp = value))
                     },
@@ -634,6 +682,7 @@ private fun PlaybackSettingsSection(
                     title = stringResource(Res.string.compose_player_font_family),
                     description = subtitleFontFamilyLabel(subtitleStyle.fontFamily, subtitleStyle.customFontName),
                     enabled = subtitleRenderingEnabled,
+                    disabledReason = subtitleRenderingDisabledReason,
                     isTablet = isTablet,
                     onClick = { showSubtitleFontDialog = true },
                 )
@@ -646,6 +695,7 @@ private fun PlaybackSettingsSection(
                     step = 5,
                     isTablet = isTablet,
                     enabled = subtitleRenderingEnabled,
+                    disabledReason = subtitleRenderingDisabledReason,
                     onValueChange = { value ->
                         PlayerSettingsRepository.setSubtitleStyle(subtitleStyle.copy(bottomOffset = value))
                     },
@@ -656,6 +706,7 @@ private fun PlaybackSettingsSection(
                     description = stringResource(Res.string.settings_playback_subtitle_bold_description),
                     checked = subtitleStyle.bold,
                     enabled = subtitleRenderingEnabled,
+                    disabledReason = subtitleRenderingDisabledReason,
                     isTablet = isTablet,
                     onCheckedChange = { enabled ->
                         PlayerSettingsRepository.setSubtitleStyle(subtitleStyle.copy(bold = enabled))
@@ -666,6 +717,7 @@ private fun PlaybackSettingsSection(
                     title = stringResource(Res.string.settings_playback_subtitle_text_color),
                     description = subtitleColorLabel(subtitleStyle.textColor),
                     enabled = subtitleRenderingEnabled,
+                    disabledReason = subtitleRenderingDisabledReason,
                     isTablet = isTablet,
                     onClick = { showSubtitleTextColorDialog = true },
                 )
@@ -674,6 +726,7 @@ private fun PlaybackSettingsSection(
                     title = stringResource(Res.string.settings_playback_subtitle_background_color),
                     description = subtitleColorLabel(subtitleStyle.backgroundColor),
                     enabled = subtitleRenderingEnabled,
+                    disabledReason = subtitleRenderingDisabledReason,
                     isTablet = isTablet,
                     onClick = { showSubtitleBackgroundColorDialog = true },
                 )
@@ -686,6 +739,7 @@ private fun PlaybackSettingsSection(
                     step = 5,
                     isTablet = isTablet,
                     enabled = subtitleRenderingEnabled,
+                    disabledReason = subtitleRenderingDisabledReason,
                     onValueChange = { value ->
                         PlayerSettingsRepository.setSubtitleStyle(
                             subtitleStyle.copy(textOpacity = value / 100f),
@@ -701,6 +755,7 @@ private fun PlaybackSettingsSection(
                     step = 5,
                     isTablet = isTablet,
                     enabled = subtitleRenderingEnabled,
+                    disabledReason = subtitleRenderingDisabledReason,
                     onValueChange = { value ->
                         PlayerSettingsRepository.setSubtitleStyle(
                             subtitleStyle.copy(backgroundOpacity = value / 100f),
@@ -712,6 +767,7 @@ private fun PlaybackSettingsSection(
                     title = stringResource(Res.string.settings_playback_subtitle_edge_style),
                     description = subtitleEdgeStyleLabel(subtitleStyle.edgeStyle),
                     enabled = subtitleRenderingEnabled,
+                    disabledReason = subtitleRenderingDisabledReason,
                     isTablet = isTablet,
                     onClick = { showSubtitleEdgeStyleDialog = true },
                 )
@@ -721,6 +777,7 @@ private fun PlaybackSettingsSection(
                         title = stringResource(Res.string.settings_playback_subtitle_outline_color),
                         description = subtitleColorLabel(subtitleStyle.outlineColor),
                         enabled = subtitleRenderingEnabled,
+                        disabledReason = subtitleRenderingDisabledReason,
                         isTablet = isTablet,
                         onClick = { showSubtitleOutlineColorDialog = true },
                     )
@@ -733,6 +790,7 @@ private fun PlaybackSettingsSection(
                         description = stringResource(Res.string.settings_playback_enable_libass_description),
                         checked = useLibass,
                         enabled = subtitleRenderingEnabled,
+                        disabledReason = subtitleRenderingDisabledReason,
                         isTablet = isTablet,
                         onCheckedChange = PlayerSettingsRepository::setUseLibass,
                     )
@@ -742,6 +800,7 @@ private fun PlaybackSettingsSection(
                             title = stringResource(Res.string.settings_playback_render_type),
                             description = libassRenderTypeLabel(libassRenderType),
                             enabled = subtitleRenderingEnabled,
+                            disabledReason = subtitleRenderingDisabledReason,
                             isTablet = isTablet,
                             onClick = { showLibassRenderTypeDialog = true },
                         )
@@ -984,6 +1043,18 @@ private fun PlaybackSettingsSection(
             val exoOptionsEnabled = decoderEnabled && androidPlaybackEngine != AndroidPlaybackEngine.Libmpv
             val libmpvOptionsVisible = androidPlaybackEngine != AndroidPlaybackEngine.ExoPlayer
             val libmpvOptionsEnabled = decoderEnabled && libmpvOptionsVisible
+            // These rows have two independent reasons to be off, so the note has to name the
+            // one that actually applies rather than always blaming the external player.
+            val exoOptionsDisabledReason = if (decoderEnabled) {
+                exoPlayerEngineDisabledReason
+            } else {
+                externalPlayerDisabledReason
+            }
+            val libmpvOptionsDisabledReason = if (decoderEnabled) {
+                libmpvEngineDisabledReason
+            } else {
+                externalPlayerDisabledReason
+            }
             SettingsSection(
                 title = stringResource(Res.string.settings_playback_section_decoder),
                 isTablet = isTablet,
@@ -993,6 +1064,7 @@ private fun PlaybackSettingsSection(
                         title = stringResource(Res.string.settings_playback_engine),
                         description = androidPlaybackEngine.label,
                         enabled = decoderEnabled,
+                        disabledReason = externalPlayerDisabledReason,
                         isTablet = isTablet,
                         onClick = { showPlaybackEngineDialog = true },
                     )
@@ -1002,6 +1074,7 @@ private fun PlaybackSettingsSection(
                             title = stringResource(Res.string.settings_playback_libmpv_video_output),
                             description = androidLibmpvVideoOutput.label,
                             enabled = libmpvOptionsEnabled,
+                            disabledReason = libmpvOptionsDisabledReason,
                             isTablet = isTablet,
                             onClick = { showLibmpvVideoOutputDialog = true },
                         )
@@ -1011,6 +1084,7 @@ private fun PlaybackSettingsSection(
                             description = stringResource(Res.string.settings_playback_libmpv_hardware_decoding_description),
                             checked = androidLibmpvHardwareDecodingEnabled,
                             enabled = libmpvOptionsEnabled,
+                            disabledReason = libmpvOptionsDisabledReason,
                             isTablet = isTablet,
                             onCheckedChange = PlayerSettingsRepository::setAndroidLibmpvHardwareDecodingEnabled,
                         )
@@ -1020,6 +1094,7 @@ private fun PlaybackSettingsSection(
                             description = stringResource(Res.string.settings_playback_libmpv_yuv420p_description),
                             checked = androidLibmpvYuv420pEnabled,
                             enabled = libmpvOptionsEnabled,
+                            disabledReason = libmpvOptionsDisabledReason,
                             isTablet = isTablet,
                             onCheckedChange = PlayerSettingsRepository::setAndroidLibmpvYuv420pEnabled,
                         )
@@ -1029,6 +1104,7 @@ private fun PlaybackSettingsSection(
                         title = stringResource(Res.string.settings_playback_decoder_priority),
                         description = decoderPriorityLabel(decoderPriority),
                         enabled = exoOptionsEnabled,
+                        disabledReason = exoOptionsDisabledReason,
                         isTablet = isTablet,
                         onClick = { showDecoderPriorityDialog = true },
                     )
@@ -1038,6 +1114,7 @@ private fun PlaybackSettingsSection(
                         description = stringResource(Res.string.settings_playback_map_dv7_to_hevc_description),
                         checked = mapDV7ToHevc,
                         enabled = exoOptionsEnabled,
+                        disabledReason = exoOptionsDisabledReason,
                         isTablet = isTablet,
                         onCheckedChange = PlayerSettingsRepository::setMapDV7ToHevc,
                     )
@@ -1047,6 +1124,7 @@ private fun PlaybackSettingsSection(
                         description = stringResource(Res.string.settings_playback_tunneled_playback_description),
                         checked = tunnelingEnabled,
                         enabled = exoOptionsEnabled,
+                        disabledReason = exoOptionsDisabledReason,
                         isTablet = isTablet,
                         onCheckedChange = PlayerSettingsRepository::setTunnelingEnabled,
                     )

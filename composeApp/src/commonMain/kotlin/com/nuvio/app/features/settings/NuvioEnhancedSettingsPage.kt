@@ -406,6 +406,11 @@ private fun NuvioEnhancedSettingsPageContent(
                         checked = playerSettings.androidMemorySafeBufferEnabled,
                         enabled = !playerSettings.externalPlayerEnabled &&
                             playerSettings.androidPlaybackEngine != AndroidPlaybackEngine.Libmpv,
+                        disabledReason = if (playerSettings.externalPlayerEnabled) {
+                            stringResource(Res.string.settings_playback_unavailable_external_player)
+                        } else {
+                            stringResource(Res.string.settings_playback_unavailable_exoplayer_engine)
+                        },
                         isTablet = isTablet,
                         highlighted = isNew(NuvioEnhancedFeature.PlayerStatusOverlay),
                         onCheckedChange = PlayerSettingsRepository::setAndroidMemorySafeBufferEnabled,

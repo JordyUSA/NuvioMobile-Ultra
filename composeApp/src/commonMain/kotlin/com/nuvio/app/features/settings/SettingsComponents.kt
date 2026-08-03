@@ -245,6 +245,8 @@ internal fun SettingsNavigationRow(
     icon: ImageVector? = null,
     iconPainter: Painter? = null,
     enabled: Boolean = true,
+    /** Shown when [enabled] is false, so a greyed-out row explains itself. */
+    disabledReason: String? = null,
     isTablet: Boolean,
     highlighted: Boolean = false,
     onClick: () -> Unit,
@@ -321,6 +323,7 @@ internal fun SettingsNavigationRow(
                     color = tokens.colors.textMuted,
                     modifier = Modifier.alpha(0.92f),
                 )
+                SettingsDisabledReason(enabled = enabled, reason = disabledReason)
             }
         }
     }
@@ -332,6 +335,8 @@ internal fun SettingsSwitchRow(
     description: String? = null,
     checked: Boolean,
     enabled: Boolean = true,
+    /** Shown when [enabled] is false, so a greyed-out row explains itself. */
+    disabledReason: String? = null,
     isTablet: Boolean,
     highlighted: Boolean = false,
     onCheckedChange: (Boolean) -> Unit,
@@ -362,27 +367,68 @@ internal fun SettingsSwitchRow(
             modifier = Modifier
                 .weight(1f)
                 .padding(end = 12.dp)
-                .widthIn(max = if (isTablet) 560.dp else Dp.Unspecified)
-                .alpha(if (enabled) NuvioTokens.Opacity.visible else tokens.opacity.medium),
+                .widthIn(max = if (isTablet) 560.dp else Dp.Unspecified),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            SettingsRowTitle(
-                title = title,
-                highlighted = highlighted,
-            )
-            if (!description.isNullOrBlank()) {
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = tokens.colors.textMuted,
+            Column(
+                modifier = Modifier.alpha(
+                    if (enabled) NuvioTokens.Opacity.visible else tokens.opacity.medium,
+                ),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                SettingsRowTitle(
+                    title = title,
+                    highlighted = highlighted,
                 )
+                if (!description.isNullOrBlank()) {
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = tokens.colors.textMuted,
+                    )
+                }
             }
+            SettingsDisabledReason(enabled = enabled, reason = disabledReason)
         }
         SettingsGradientSwitch(
             checked = checked,
             enabled = enabled,
             highlighted = highlighted,
             modifier = Modifier.padding(start = 4.dp),
+        )
+    }
+}
+
+/**
+ * The one line explaining why a control is greyed out.
+ *
+ * Rendered outside whatever dimming the row applies to its own content: the explanation is the
+ * one thing on a disabled row that has to stay readable, and dimming it with the control it
+ * describes defeats the point of showing it.
+ */
+@Composable
+private fun SettingsDisabledReason(
+    enabled: Boolean,
+    reason: String?,
+) {
+    if (enabled || reason.isNullOrBlank()) return
+    val tokens = MaterialTheme.nuvio
+
+    Row(
+        modifier = Modifier.padding(top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Lock,
+            contentDescription = null,
+            tint = tokens.colors.textMuted,
+            modifier = Modifier.size(14.dp),
+        )
+        Text(
+            text = reason,
+            style = MaterialTheme.typography.labelMedium,
+            color = tokens.colors.textMuted,
         )
     }
 }
