@@ -19,8 +19,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -44,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.downloads_action_more
 import nuvio.composeapp.generated.resources.home_view_all
 import nuvio.composeapp.generated.resources.poster_logo_content_description
 import org.jetbrains.compose.resources.stringResource
@@ -146,6 +150,13 @@ fun NuvioPosterCard(
     bottomLeftLogoUrl: String? = null,
     bottomLeftText: String? = null,
     isWatched: Boolean = false,
+    /** Short corner label, e.g. a resolution on a downloaded file. */
+    topStartBadge: String? = null,
+    /**
+     * Opens the same menu as a long press. Long press is not discoverable on its own, so cards
+     * that have a menu also need a visible affordance.
+     */
+    onOverflowClick: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -221,6 +232,41 @@ fun NuvioPosterCard(
                             modifier = Modifier.widthIn(max = catalogLogoOverlaySize.textMaxWidth),
                         )
                     }
+                }
+            }
+
+            if (!topStartBadge.isNullOrBlank()) {
+                Text(
+                    text = topStartBadge,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(NuvioTokens.Space.s6)
+                        .clip(RoundedCornerShape(NuvioTokens.Space.s6))
+                        .background(Color.Black.copy(alpha = 0.62f))
+                        .padding(horizontal = NuvioTokens.Space.s6, vertical = NuvioTokens.Space.s2),
+                )
+            }
+
+            if (onOverflowClick != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(NuvioTokens.Space.s6)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.62f))
+                        .clickable(onClick = onOverflowClick)
+                        .padding(NuvioTokens.Space.s2),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = stringResource(Res.string.downloads_action_more),
+                        tint = Color.White,
+                        modifier = Modifier.size(NuvioTokens.Space.s18),
+                    )
                 }
             }
 

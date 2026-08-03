@@ -2,7 +2,12 @@ package com.nuvio.app.features.downloads
 
 import com.nuvio.app.features.details.MetaDetails
 import com.nuvio.app.features.details.MetaDetailsRepository
+import com.nuvio.app.features.cast.probeCastMedia
 import com.nuvio.app.features.streams.StreamItem
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +25,8 @@ object DownloadsRepository {
     val uiState: StateFlow<DownloadsUiState> = _uiState.asStateFlow()
 
     private val activeHandles = mutableMapOf<String, DownloadsTaskHandle>()
+    private val probeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val probesInFlight = mutableSetOf<String>()
     private var hasLoaded = false
     private var nextDownloadOrdinal = 0L
 
@@ -432,9 +439,12 @@ object DownloadsRepository {
                         totalBytes = totalBytes?.takeIf { it > 0L } ?: current.totalBytes,
                         downloadSpeedBytesPerSecond = 0L,
                         errorMessage = null,
+                        failureReason = null,
+                        errorDetail = null,
                         updatedAtEpochMs = DownloadsClock.nowEpochMs(),
                     )
                 }
+                probeMediaInfo(item.id)
             },
             onFailure = { reason, detail ->
                 activeHandles.remove(item.id)
@@ -456,6 +466,32 @@ object DownloadsRepository {
         )
 
         activeHandles[item.id] = handle
+    }
+
+    /**
+     * Reads container, codec and track detail out of a finished download.
+     *
+     * Uses the same prober the Cast pipeline uses — MediaExtractor on Android, FFprobe on iOS —
+     * against the local file. Failure is expected and survivable: an exotic container simply
+     * leaves [DownloadItem.mediaInfo] null, and the resolution badge falls back to parsing the
+     * release name. Nothing about playback or the download itself depends on this succeeding.
+     */
+    fun probeMediaInfo(downloadId: String) {
+        val item = _uiState.value.items.firstOrNull { it.id == downloadId } ?: return
+        if (item.mediaInfo != null) return
+        val localFileUri = item.localFileUri?.takeIf { it.isNotBlank() } ?: return
+        if (!probesInFlight.add(downloadId)) return
+
+        probeScope.launch {
+            try {
+                val probe = probeCastMedia(localFileUri).getOrNull() ?: return@launch
+                mutateItem(downloadId) { current ->
+                    current.copy(mediaInfo = probe.toDownloadMediaInfo())
+                }
+            } finally {
+                probesInFlight.remove(downloadId)
+            }
+        }
     }
 
     private fun mutateItem(downloadId: String, transform: (DownloadItem) -> DownloadItem) {

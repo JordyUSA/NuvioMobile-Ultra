@@ -32,6 +32,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CheckCircleOutline
@@ -101,6 +103,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import coil3.compose.AsyncImage
 import coil3.compose.setSingletonImageLoaderFactory
+import com.nuvio.app.core.share.FileShareBridge
 import com.nuvio.app.core.build.AppFeaturePolicy
 import com.nuvio.app.core.auth.AuthRepository
 import com.nuvio.app.core.auth.AuthState
@@ -167,6 +170,7 @@ import com.nuvio.app.features.cloud.providerPosterUrl
 import com.nuvio.app.features.debrid.DirectDebridPlayableResult
 import com.nuvio.app.features.debrid.DirectDebridPlaybackResolver
 import com.nuvio.app.features.debrid.toastMessage
+import com.nuvio.app.features.downloads.DownloadMediaInfoSheet
 import com.nuvio.app.features.downloads.DownloadItem
 import com.nuvio.app.features.downloads.DownloadStatus
 import com.nuvio.app.features.downloads.DownloadsRepository
@@ -831,6 +835,8 @@ private fun MainAppContent(
         var selectedDownloadActionAnchor by remember { mutableStateOf<PosterZoomAnchor?>(null) }
         var confirmDownloadDeleteAfterOverlayDismissTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
         var confirmDownloadDeleteTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
+        var mediaInfoDownloadTarget by remember { mutableStateOf<DownloadItem?>(null) }
+        val shareDownloadFailedText = stringResource(Res.string.downloads_share_failed)
         val posterOverlayHazeState = rememberHazeState()
         var selectedContinueWatchingForActions by remember { mutableStateOf<ContinueWatchingItem?>(null) }
         var requestedSettingsPageName by rememberSaveable { mutableStateOf(initialSettingsPageName) }
@@ -3682,6 +3688,28 @@ private fun MainAppContent(
                                 },
                             ),
                             PosterZoomOverlayAction(
+                                icon = Icons.Default.Share,
+                                label = stringResource(Res.string.downloads_action_share),
+                                onSelected = {
+                                    val shared = primaryDownload.localFileUri?.let { localFileUri ->
+                                        FileShareBridge.shareFile(
+                                            localFileUri = localFileUri,
+                                            displayName = primaryDownload.title,
+                                        )
+                                    } ?: false
+                                    if (!shared) {
+                                        NuvioToastController.show(shareDownloadFailedText)
+                                    }
+                                },
+                            ),
+                            PosterZoomOverlayAction(
+                                icon = Icons.Default.Description,
+                                label = stringResource(Res.string.downloads_media_info),
+                                onSelected = {
+                                    mediaInfoDownloadTarget = primaryDownload
+                                },
+                            ),
+                            PosterZoomOverlayAction(
                                 icon = Icons.Default.DeleteOutline,
                                 label = stringResource(Res.string.action_delete),
                                 isDestructive = true,
@@ -3714,6 +3742,16 @@ private fun MainAppContent(
                         },
                     )
                 }
+            }
+
+            mediaInfoDownloadTarget?.let { target ->
+                // Re-read from the repository so a probe finishing while the sheet is open
+                // fills it in, instead of freezing whatever was known at the moment of the tap.
+                val liveTarget = downloadsUiState.items.firstOrNull { it.id == target.id } ?: target
+                DownloadMediaInfoSheet(
+                    item = liveTarget,
+                    onDismiss = { mediaInfoDownloadTarget = null },
+                )
             }
 
             confirmDownloadDeleteTarget?.let { target ->

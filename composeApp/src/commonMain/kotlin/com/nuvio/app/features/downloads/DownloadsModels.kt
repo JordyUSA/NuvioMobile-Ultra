@@ -68,6 +68,7 @@ data class DownloadItem(
     val failureReason: DownloadFailureReason? = null,
     /** The raw platform error, kept for the media-info sheet rather than shown in the list. */
     val errorDetail: String? = null,
+    val mediaInfo: DownloadMediaInfo? = null,
     val createdAtEpochMs: Long,
     val updatedAtEpochMs: Long,
 ) {

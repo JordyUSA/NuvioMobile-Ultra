@@ -15,6 +15,8 @@ fun HomePosterCard(
     modifier: Modifier = Modifier,
     useLandscapeBackdropMode: Boolean = false,
     isWatched: Boolean = false,
+    topStartBadge: String? = null,
+    onOverflowClick: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -31,6 +33,8 @@ fun HomePosterCard(
         bottomLeftLogoUrl = if (isLandscapeMode) item.logo else null,
         bottomLeftText = if (isLandscapeMode && item.logo.isNullOrBlank() && !posterCardStyle.hideLabelsEnabled) item.name else null,
         isWatched = isWatched,
+        topStartBadge = topStartBadge,
+        onOverflowClick = onOverflowClick,
         onClick = onClick,
         onLongClick = onLongClick,
     )

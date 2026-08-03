@@ -111,6 +111,7 @@ import com.nuvio.app.features.downloads.DownloadItem
 import com.nuvio.app.features.downloads.DownloadsRepository
 import com.nuvio.app.features.downloads.DownloadsUiState
 import com.nuvio.app.features.downloads.downloadProgressInfoLines
+import com.nuvio.app.features.downloads.resolutionBadge
 import com.nuvio.app.features.downloads.sortedForSeriesDownloads
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.PosterShape
@@ -788,6 +789,12 @@ private fun LazyListScope.downloadsLibraryContent(
                     HomePosterCard(
                         item = libraryItem.toMetaPreview(),
                         isWatched = false,
+                        topStartBadge = representative.resolutionBadge(),
+                        onOverflowClick = if (disintegratingDownloadKey == entry.key) {
+                            null
+                        } else {
+                            { onDownloadLongClick(target) }
+                        },
                         onClick = if (disintegratingDownloadKey == entry.key) {
                             null
                         } else {

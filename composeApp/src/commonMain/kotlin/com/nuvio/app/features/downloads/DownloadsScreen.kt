@@ -17,7 +17,9 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -37,6 +39,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.app.core.i18n.localizedByteSize
+import com.nuvio.app.core.share.FileShareBridge
 import com.nuvio.app.core.ui.NuvioScreen
 import com.nuvio.app.core.ui.NuvioScreenHeader
 import com.nuvio.app.core.ui.NuvioToastController
@@ -318,6 +321,8 @@ private fun DownloadRow(
     onRetry: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    var showMediaInfo by remember { mutableStateOf(false) }
+    val shareFailedText = stringResource(Res.string.downloads_share_failed)
     val displayTitle = item.displayTitle()
     val displaySubtitle = downloadDisplaySubtitle(
         item = item,
@@ -368,6 +373,14 @@ private fun DownloadRow(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    item.resolutionBadge()?.let { badge ->
+                        Text(
+                            text = badge,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                     if (item.status == DownloadStatus.Downloading) {
                         progressInfoLines
                             .take(2)
@@ -418,6 +431,34 @@ private fun DownloadRow(
                             }
                         }
                     }
+                    if (item.isPlayable) {
+                        IconButton(
+                            onClick = {
+                                val shared = item.localFileUri?.let { localFileUri ->
+                                    FileShareBridge.shareFile(
+                                        localFileUri = localFileUri,
+                                        displayName = item.title,
+                                    )
+                                } ?: false
+                                if (!shared) {
+                                    NuvioToastController.show(shareFailedText)
+                                }
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Share,
+                                contentDescription = stringResource(Res.string.downloads_action_share),
+                            )
+                        }
+                    }
+                    // Long press is not discoverable, so the same actions get a visible entry
+                    // point next to share.
+                    IconButton(onClick = { showMediaInfo = true }) {
+                        Icon(
+                            imageVector = Icons.Rounded.MoreVert,
+                            contentDescription = stringResource(Res.string.downloads_action_more),
+                        )
+                    }
                     IconButton(onClick = onDelete) {
                         Icon(
                             imageVector = Icons.Rounded.Delete,
@@ -425,6 +466,13 @@ private fun DownloadRow(
                         )
                     }
                 }
+            }
+
+            if (showMediaInfo) {
+                DownloadMediaInfoSheet(
+                    item = item,
+                    onDismiss = { showMediaInfo = false },
+                )
             }
 
             if (item.status == DownloadStatus.Downloading) {
