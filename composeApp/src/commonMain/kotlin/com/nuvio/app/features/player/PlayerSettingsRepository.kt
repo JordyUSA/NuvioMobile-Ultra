@@ -300,8 +300,7 @@ object PlayerSettingsRepository {
                 ?: SubtitleStyleState.DEFAULT.backgroundColor,
             outlineColor = subtitleColorFromStorage(PlayerSettingsStorage.loadSubtitleOutlineColor())
                 ?: SubtitleStyleState.DEFAULT.outlineColor,
-            outlineEnabled = PlayerSettingsStorage.loadSubtitleOutlineEnabled()
-                ?: SubtitleStyleState.DEFAULT.outlineEnabled,
+            edgeStyle = resolveSubtitleEdgeStyle(),
             outlineWidth = PlayerSettingsStorage.loadSubtitleOutlineWidth()
                 ?: SubtitleStyleState.DEFAULT.outlineWidth,
             bold = PlayerSettingsStorage.loadSubtitleBold()
@@ -319,6 +318,10 @@ object PlayerSettingsRepository {
                 ?: SubtitleStyleState.DEFAULT.useForcedSubtitles,
             showOnlyPreferredLanguages = PlayerSettingsStorage.loadSubtitleShowOnlyPreferredLanguages()
                 ?: SubtitleStyleState.DEFAULT.showOnlyPreferredLanguages,
+            textOpacity = PlayerSettingsStorage.loadSubtitleTextOpacity()
+                ?: SubtitleStyleState.DEFAULT.textOpacity,
+            backgroundOpacity = PlayerSettingsStorage.loadSubtitleBackgroundOpacity()
+                ?: SubtitleStyleState.DEFAULT.backgroundOpacity,
         )
         addonSubtitleStartupMode = PlayerSettingsStorage.loadAddonSubtitleStartupMode()
             ?.let { runCatching { AddonSubtitleStartupMode.valueOf(it) }.getOrNull() }
@@ -568,6 +571,24 @@ object PlayerSettingsRepository {
         PlayerSettingsStorage.saveSecondaryPreferredSubtitleLanguage(normalized)
     }
 
+    /**
+     * Reads the edge style, falling back to the pre-selector outline flag.
+     *
+     * Profiles created before the selector existed only have `subtitle_outline_enabled`, and a
+     * user who deliberately turned the outline off should not find it back on after updating.
+     */
+    private fun resolveSubtitleEdgeStyle(): SubtitleEdgeStyle {
+        PlayerSettingsStorage.loadSubtitleEdgeStyle()
+            ?.let { stored -> runCatching { SubtitleEdgeStyle.valueOf(stored) }.getOrNull() }
+            ?.let { return it }
+
+        return when (PlayerSettingsStorage.loadSubtitleOutlineEnabled()) {
+            true -> SubtitleEdgeStyle.Outline
+            false -> SubtitleEdgeStyle.None
+            null -> SubtitleStyleState.DEFAULT.edgeStyle
+        }
+    }
+
     fun setSubtitleStyle(style: SubtitleStyleState) {
         ensureLoaded()
         if (subtitleStyle == style) return
@@ -576,7 +597,12 @@ object PlayerSettingsRepository {
         PlayerSettingsStorage.saveSubtitleTextColor(style.textColor.toStorageHexString())
         PlayerSettingsStorage.saveSubtitleBackgroundColor(style.backgroundColor.toStorageHexString())
         PlayerSettingsStorage.saveSubtitleOutlineColor(style.outlineColor.toStorageHexString())
+        PlayerSettingsStorage.saveSubtitleEdgeStyle(style.edgeStyle.name)
+        // Still written so a downgrade, or a device still on the old build receiving this
+        // profile over sync, keeps a sensible outline setting.
         PlayerSettingsStorage.saveSubtitleOutlineEnabled(style.outlineEnabled)
+        PlayerSettingsStorage.saveSubtitleTextOpacity(style.textOpacity)
+        PlayerSettingsStorage.saveSubtitleBackgroundOpacity(style.backgroundOpacity)
         PlayerSettingsStorage.saveSubtitleOutlineWidth(style.outlineWidth)
         PlayerSettingsStorage.saveSubtitleBold(style.bold)
         PlayerSettingsStorage.saveSubtitleFontSizeSp(style.fontSizeSp)

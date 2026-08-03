@@ -40,6 +40,9 @@ actual object PlayerSettingsStorage {
     private const val subtitleBackgroundColorKey = "subtitle_background_color"
     private const val subtitleOutlineColorKey = "subtitle_outline_color"
     private const val subtitleOutlineEnabledKey = "subtitle_outline_enabled"
+    private const val subtitleEdgeStyleKey = "subtitle_edge_style"
+    private const val subtitleTextOpacityKey = "subtitle_text_opacity"
+    private const val subtitleBackgroundOpacityKey = "subtitle_background_opacity"
     private const val subtitleOutlineWidthKey = "subtitle_outline_width"
     private const val subtitleBoldKey = "subtitle_bold"
     private const val subtitleFontSizeSpKey = "subtitle_font_size_sp"
@@ -117,6 +120,9 @@ actual object PlayerSettingsStorage {
         subtitleBackgroundColorKey,
         subtitleOutlineColorKey,
         subtitleOutlineEnabledKey,
+        subtitleEdgeStyleKey,
+        subtitleTextOpacityKey,
+        subtitleBackgroundOpacityKey,
         subtitleOutlineWidthKey,
         subtitleBoldKey,
         subtitleFontSizeSpKey,
@@ -491,6 +497,50 @@ actual object PlayerSettingsStorage {
         preferences
             ?.edit()
             ?.putBoolean(ProfileScopedKey.of(subtitleOutlineEnabledKey), enabled)
+            ?.apply()
+    }
+
+    actual fun loadSubtitleEdgeStyle(): String? =
+        preferences?.getString(ProfileScopedKey.of(subtitleEdgeStyleKey), null)
+
+    actual fun saveSubtitleEdgeStyle(edgeStyle: String) {
+        preferences
+            ?.edit()
+            ?.putString(ProfileScopedKey.of(subtitleEdgeStyleKey), edgeStyle)
+            ?.apply()
+    }
+
+    actual fun loadSubtitleTextOpacity(): Float? =
+        preferences?.let { sharedPreferences ->
+            val key = ProfileScopedKey.of(subtitleTextOpacityKey)
+            if (sharedPreferences.contains(key)) {
+                sharedPreferences.getFloat(key, 1f).coerceIn(0f, 1f)
+            } else {
+                null
+            }
+        }
+
+    actual fun saveSubtitleTextOpacity(opacity: Float) {
+        preferences
+            ?.edit()
+            ?.putFloat(ProfileScopedKey.of(subtitleTextOpacityKey), opacity.coerceIn(0f, 1f))
+            ?.apply()
+    }
+
+    actual fun loadSubtitleBackgroundOpacity(): Float? =
+        preferences?.let { sharedPreferences ->
+            val key = ProfileScopedKey.of(subtitleBackgroundOpacityKey)
+            if (sharedPreferences.contains(key)) {
+                sharedPreferences.getFloat(key, 1f).coerceIn(0f, 1f)
+            } else {
+                null
+            }
+        }
+
+    actual fun saveSubtitleBackgroundOpacity(opacity: Float) {
+        preferences
+            ?.edit()
+            ?.putFloat(ProfileScopedKey.of(subtitleBackgroundOpacityKey), opacity.coerceIn(0f, 1f))
             ?.apply()
     }
 
@@ -1253,6 +1303,9 @@ actual object PlayerSettingsStorage {
         loadSubtitleBackgroundColor()?.let { put(subtitleBackgroundColorKey, encodeSyncString(it)) }
         loadSubtitleOutlineColor()?.let { put(subtitleOutlineColorKey, encodeSyncString(it)) }
         loadSubtitleOutlineEnabled()?.let { put(subtitleOutlineEnabledKey, encodeSyncBoolean(it)) }
+        loadSubtitleEdgeStyle()?.let { put(subtitleEdgeStyleKey, encodeSyncString(it)) }
+        loadSubtitleTextOpacity()?.let { put(subtitleTextOpacityKey, encodeSyncFloat(it)) }
+        loadSubtitleBackgroundOpacity()?.let { put(subtitleBackgroundOpacityKey, encodeSyncFloat(it)) }
         loadSubtitleOutlineWidth()?.let { put(subtitleOutlineWidthKey, encodeSyncInt(it)) }
         loadSubtitleBold()?.let { put(subtitleBoldKey, encodeSyncBoolean(it)) }
         loadSubtitleFontSizeSp()?.let { put(subtitleFontSizeSpKey, encodeSyncInt(it)) }
@@ -1336,6 +1389,9 @@ actual object PlayerSettingsStorage {
         payload.decodeSyncString(subtitleBackgroundColorKey)?.let(::saveSubtitleBackgroundColor)
         payload.decodeSyncString(subtitleOutlineColorKey)?.let(::saveSubtitleOutlineColor)
         payload.decodeSyncBoolean(subtitleOutlineEnabledKey)?.let(::saveSubtitleOutlineEnabled)
+        payload.decodeSyncString(subtitleEdgeStyleKey)?.let(::saveSubtitleEdgeStyle)
+        payload.decodeSyncFloat(subtitleTextOpacityKey)?.let(::saveSubtitleTextOpacity)
+        payload.decodeSyncFloat(subtitleBackgroundOpacityKey)?.let(::saveSubtitleBackgroundOpacity)
         payload.decodeSyncInt(subtitleOutlineWidthKey)?.let(::saveSubtitleOutlineWidth)
         payload.decodeSyncBoolean(subtitleBoldKey)?.let(::saveSubtitleBold)
         payload.decodeSyncInt(subtitleFontSizeSpKey)?.let(::saveSubtitleFontSizeSp)

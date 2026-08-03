@@ -68,6 +68,8 @@ import com.nuvio.app.features.player.IosTargetPrimaries
 import com.nuvio.app.features.player.IosTargetTransfer
 import com.nuvio.app.core.i18n.localizedByteSize
 import com.nuvio.app.features.player.STREAM_CACHE_SIZE_VALUES_MB
+import com.nuvio.app.features.player.SubtitleEdgeStyle
+import com.nuvio.app.features.player.SubtitleStyleState
 import com.nuvio.app.features.player.PlayerSettingsRepository
 import com.nuvio.app.features.player.STREAM_AUTO_PLAY_TIMEOUT_VALUES
 import com.nuvio.app.features.player.SubtitleBackgroundColorSwatches
@@ -337,6 +339,7 @@ private fun PlaybackSettingsSection(
     var showLibmpvVideoOutputDialog by remember { mutableStateOf(false) }
     var showDecoderPriorityDialog by remember { mutableStateOf(false) }
     var showStreamCacheSizeDialog by remember { mutableStateOf(false) }
+    var showSubtitleEdgeStyleDialog by remember { mutableStateOf(false) }
     var showHoldToSpeedValueDialog by remember { mutableStateOf(false) }
     var showIosAudioOutputDialog by remember { mutableStateOf(false) }
     var showIosHardwareDecoderDialog by remember { mutableStateOf(false) }
@@ -618,8 +621,8 @@ private fun PlaybackSettingsSection(
                     title = stringResource(Res.string.settings_playback_subtitle_size),
                     value = subtitleStyle.fontSizeSp,
                     valueText = stringResource(Res.string.compose_player_font_size_value, subtitleStyle.fontSizeSp),
-                    valueRange = 12..40,
-                    step = 2,
+                    valueRange = SubtitleStyleState.MIN_FONT_SIZE_SP..SubtitleStyleState.MAX_FONT_SIZE_SP,
+                    step = SubtitleStyleState.FONT_SIZE_STEP_SP,
                     isTablet = isTablet,
                     enabled = subtitleRenderingEnabled,
                     onValueChange = { value ->
@@ -675,17 +678,44 @@ private fun PlaybackSettingsSection(
                     onClick = { showSubtitleBackgroundColorDialog = true },
                 )
                 SettingsGroupDivider(isTablet = isTablet)
-                SettingsSwitchRow(
-                    title = stringResource(Res.string.settings_playback_subtitle_outline),
-                    description = stringResource(Res.string.settings_playback_subtitle_outline_description),
-                    checked = subtitleStyle.outlineEnabled,
-                    enabled = subtitleRenderingEnabled,
+                SettingsSliderRow(
+                    title = stringResource(Res.string.settings_playback_subtitle_text_opacity),
+                    value = (subtitleStyle.textOpacity * 100f).roundToInt(),
+                    valueText = "${(subtitleStyle.textOpacity * 100f).roundToInt()}%",
+                    valueRange = 20..100,
+                    step = 5,
                     isTablet = isTablet,
-                    onCheckedChange = { enabled ->
-                        PlayerSettingsRepository.setSubtitleStyle(subtitleStyle.copy(outlineEnabled = enabled))
+                    enabled = subtitleRenderingEnabled,
+                    onValueChange = { value ->
+                        PlayerSettingsRepository.setSubtitleStyle(
+                            subtitleStyle.copy(textOpacity = value / 100f),
+                        )
                     },
                 )
-                if (subtitleStyle.outlineEnabled) {
+                SettingsGroupDivider(isTablet = isTablet)
+                SettingsSliderRow(
+                    title = stringResource(Res.string.settings_playback_subtitle_background_opacity),
+                    value = (subtitleStyle.backgroundOpacity * 100f).roundToInt(),
+                    valueText = "${(subtitleStyle.backgroundOpacity * 100f).roundToInt()}%",
+                    valueRange = 0..100,
+                    step = 5,
+                    isTablet = isTablet,
+                    enabled = subtitleRenderingEnabled,
+                    onValueChange = { value ->
+                        PlayerSettingsRepository.setSubtitleStyle(
+                            subtitleStyle.copy(backgroundOpacity = value / 100f),
+                        )
+                    },
+                )
+                SettingsGroupDivider(isTablet = isTablet)
+                SettingsNavigationRow(
+                    title = stringResource(Res.string.settings_playback_subtitle_edge_style),
+                    description = subtitleEdgeStyleLabel(subtitleStyle.edgeStyle),
+                    enabled = subtitleRenderingEnabled,
+                    isTablet = isTablet,
+                    onClick = { showSubtitleEdgeStyleDialog = true },
+                )
+                if (subtitleStyle.edgeStyle.drawsEdge) {
                     SettingsGroupDivider(isTablet = isTablet)
                     SettingsNavigationRow(
                         title = stringResource(Res.string.settings_playback_subtitle_outline_color),
@@ -1522,6 +1552,19 @@ private fun PlaybackSettingsSection(
         )
     }
 
+    if (showSubtitleEdgeStyleDialog) {
+        SubtitleEdgeStyleDialog(
+            selectedEdgeStyle = autoPlayPlayerSettings.subtitleStyle.edgeStyle,
+            onEdgeStyleSelected = { edgeStyle ->
+                PlayerSettingsRepository.setSubtitleStyle(
+                    autoPlayPlayerSettings.subtitleStyle.copy(edgeStyle = edgeStyle),
+                )
+                showSubtitleEdgeStyleDialog = false
+            },
+            onDismiss = { showSubtitleEdgeStyleDialog = false },
+        )
+    }
+
     if (showStreamCacheSizeDialog) {
         StreamCacheSizeDialog(
             selectedSizeMb = autoPlayPlayerSettings.streamCacheSizeMb,
@@ -2083,6 +2126,108 @@ private fun LanguageSelectionDialog(
                                         )
                                     }
                                 }
+                                Box(
+                                    modifier = Modifier.size(24.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Check,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = stringResource(Res.string.settings_playback_dialog_close),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun subtitleEdgeStyleLabel(edgeStyle: SubtitleEdgeStyle): String = stringResource(
+    when (edgeStyle) {
+        SubtitleEdgeStyle.None -> Res.string.subtitle_edge_style_none
+        SubtitleEdgeStyle.Outline -> Res.string.subtitle_edge_style_outline
+        SubtitleEdgeStyle.DropShadow -> Res.string.subtitle_edge_style_drop_shadow
+        SubtitleEdgeStyle.OutlineAndShadow -> Res.string.subtitle_edge_style_outline_and_shadow
+        SubtitleEdgeStyle.Raised -> Res.string.subtitle_edge_style_raised
+        SubtitleEdgeStyle.Depressed -> Res.string.subtitle_edge_style_depressed
+    },
+)
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun SubtitleEdgeStyleDialog(
+    selectedEdgeStyle: SubtitleEdgeStyle,
+    onEdgeStyleSelected: (SubtitleEdgeStyle) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    BasicAlertDialog(
+        onDismissRequest = onDismiss,
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = stringResource(Res.string.settings_playback_subtitle_edge_style),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = stringResource(Res.string.settings_playback_subtitle_edge_style_description),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SubtitleEdgeStyle.entries.forEach { edgeStyle ->
+                        val isSelected = edgeStyle == selectedEdgeStyle
+                        val containerColor = if (isSelected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                        }
+
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onEdgeStyleSelected(edgeStyle) },
+                            shape = RoundedCornerShape(12.dp),
+                            color = containerColor,
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = subtitleEdgeStyleLabel(edgeStyle),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f),
+                                )
                                 Box(
                                     modifier = Modifier.size(24.dp),
                                     contentAlignment = Alignment.Center,

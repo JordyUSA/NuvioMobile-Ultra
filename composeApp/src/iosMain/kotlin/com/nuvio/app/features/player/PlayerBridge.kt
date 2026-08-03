@@ -78,6 +78,8 @@ interface NuvioPlayerBridge {
         backgroundColor: String,
         outlineColor: String,
         outlineSize: Float,
+        /** Shadow distance in mpv units; 0 disables the shadow. */
+        shadowOffset: Float,
         bold: Boolean,
         fontSize: Float,
         fontFamily: String,

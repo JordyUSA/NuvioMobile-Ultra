@@ -266,10 +266,11 @@ actual fun PlatformPlayerSurface(
 
             override fun applySubtitleStyle(style: SubtitleStyleState) {
                 bridge.applySubtitleStyle(
-                    textColor = style.textColor.toMpvColorString(),
-                    backgroundColor = style.backgroundColor.toMpvColorString(),
+                    textColor = style.effectiveTextColor.toMpvColorString(),
+                    backgroundColor = style.effectiveBackgroundColor.toMpvColorString(),
                     outlineColor = style.outlineColor.toMpvColorString(),
-                    outlineSize = if (style.outlineEnabled) style.outlineWidth.toFloat() else 0f,
+                    outlineSize = style.toMpvSubtitleOutlineSize(),
+                    shadowOffset = style.toMpvSubtitleShadowOffset(),
                     bold = style.bold,
                     fontSize = style.toMpvSubtitleFontSize(),
                     fontFamily = style.toIosMpvSubtitleFont(),
@@ -451,7 +452,23 @@ private fun SubtitleStyleState.toMpvSubtitlePosition(): Int =
     (100 - (bottomOffset / 2)).coerceIn(0, 150)
 
 private fun SubtitleStyleState.toMpvSubtitleFontSize(): Float =
-    (fontSizeSp * 3f).coerceIn(24f, 96f)
+    (fontSizeSp * 3f).coerceIn(12f, 96f)
+
+private fun SubtitleStyleState.toMpvSubtitleOutlineSize(): Float = when (edgeStyle) {
+    // A drop shadow is drawn by its offset alone; keeping a border would give the user both
+    // effects when they picked one.
+    SubtitleEdgeStyle.None, SubtitleEdgeStyle.DropShadow -> 0f
+    else -> outlineWidth.toFloat()
+}
+
+private fun SubtitleStyleState.toMpvSubtitleShadowOffset(): Float = when (edgeStyle) {
+    SubtitleEdgeStyle.DropShadow,
+    SubtitleEdgeStyle.OutlineAndShadow -> outlineWidth.toFloat().coerceAtLeast(1f)
+    // mpv has no raised or depressed edge, so both approximate with a light shadow rather than
+    // being silently dropped.
+    SubtitleEdgeStyle.Raised, SubtitleEdgeStyle.Depressed -> 1f
+    else -> 0f
+}
 
 private fun SubtitleFontFamily.toIosMpvSubtitleFont(): String =
     when (this) {

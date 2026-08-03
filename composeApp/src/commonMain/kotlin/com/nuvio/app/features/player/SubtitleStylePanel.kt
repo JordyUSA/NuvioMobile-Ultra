@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.nuvio.app.features.settings.subtitleEdgeStyleLabel
 import nuvio.composeapp.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 import kotlin.math.abs
@@ -213,10 +214,20 @@ private fun StyleControlsCard(
             StepperControl(
                 value = stringResource(Res.string.compose_player_font_size_value, style.fontSizeSp),
                 onMinus = {
-                    onStyleChanged(style.copy(fontSizeSp = (style.fontSizeSp - 2).coerceAtLeast(12)))
+                    onStyleChanged(
+                        style.copy(
+                            fontSizeSp = (style.fontSizeSp - SubtitleStyleState.FONT_SIZE_STEP_SP)
+                                .coerceAtLeast(SubtitleStyleState.MIN_FONT_SIZE_SP),
+                        ),
+                    )
                 },
                 onPlus = {
-                    onStyleChanged(style.copy(fontSizeSp = (style.fontSizeSp + 2).coerceAtMost(40)))
+                    onStyleChanged(
+                        style.copy(
+                            fontSizeSp = (style.fontSizeSp + SubtitleStyleState.FONT_SIZE_STEP_SP)
+                                .coerceAtMost(SubtitleStyleState.MAX_FONT_SIZE_SP),
+                        ),
+                    )
                 },
                 buttonSize = btnSize,
                 buttonRadius = btnRadius,
@@ -306,26 +317,31 @@ private fun StyleControlsCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = stringResource(Res.string.compose_player_outline),
+                text = stringResource(Res.string.compose_player_edge_style),
                 color = colorScheme.onSurfaceVariant,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
             )
+            // Cycles rather than opening a picker: this panel sits over live video, where a
+            // modal list would hide the thing the user is judging the change against.
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(10.dp))
                     .background(
-                        if (style.outlineEnabled) colorScheme.primaryContainer
+                        if (style.edgeStyle.drawsEdge) colorScheme.primaryContainer
                         else colorScheme.surface.copy(alpha = 0.8f)
                     )
                     .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.8f), RoundedCornerShape(10.dp))
-                    .clickable { onStyleChanged(style.copy(outlineEnabled = !style.outlineEnabled)) }
+                    .clickable { onStyleChanged(style.copy(edgeStyle = style.edgeStyle.next())) }
                     .padding(horizontal = 10.dp, vertical = 8.dp),
             ) {
                 Text(
-                    text = if (style.outlineEnabled) stringResource(Res.string.compose_action_on)
-                    else stringResource(Res.string.compose_action_off),
-                    color = if (style.outlineEnabled) colorScheme.onPrimaryContainer else colorScheme.onSurface,
+                    text = subtitleEdgeStyleLabel(style.edgeStyle),
+                    color = if (style.edgeStyle.drawsEdge) {
+                        colorScheme.onPrimaryContainer
+                    } else {
+                        colorScheme.onSurface
+                    },
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
                 )
@@ -834,4 +850,10 @@ private fun formatCueTimestamp(timeMs: Long): String {
     val minutes = totalSeconds / 60L
     val seconds = totalSeconds % 60L
     return "${minutes}:${seconds.toString().padStart(2, '0')}"
+}
+
+
+private fun SubtitleEdgeStyle.next(): SubtitleEdgeStyle {
+    val values = SubtitleEdgeStyle.entries
+    return values[(values.indexOf(this) + 1) % values.size]
 }

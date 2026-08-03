@@ -1483,10 +1483,12 @@ private class NuvioLibmpvView(
 
             override fun applySubtitleStyle(style: SubtitleStyleState) {
                 mpv.setPropertyString("sub-ass-override", "no")
-                mpv.setPropertyString("sub-color", style.textColor.toMpvColor())
-                mpv.setPropertyString("sub-back-color", style.backgroundColor.toMpvColor())
+                mpv.setPropertyString("sub-color", style.effectiveTextColor.toMpvColor())
+                mpv.setPropertyString("sub-back-color", style.effectiveBackgroundColor.toMpvColor())
                 mpv.setPropertyString("sub-outline-color", style.outlineColor.toMpvColor())
                 mpv.setPropertyString("sub-border-color", style.outlineColor.toMpvColor())
+                mpv.setPropertyString("sub-shadow-color", style.outlineColor.toMpvColor())
+                mpv.setPropertyString("sub-shadow-offset", "${style.toMpvSubtitleShadowOffset()}")
                 mpv.setPropertyString("sub-border-style", style.toMpvSubtitleBorderStyle())
                 mpv.setPropertyString("sub-bold", if (style.bold) "yes" else "no")
                 style.customFontDirectory()?.let { mpv.setPropertyString("sub-fonts-dir", it) }
@@ -1590,22 +1592,36 @@ private fun SubtitleStyleState.toMpvSubtitleFontSize(): Int =
         MPV_SUBTITLE_FONT_SIZE_MAX,
     )
 
-private fun SubtitleStyleState.toMpvSubtitleOutlineSize(): Int =
-    if (!outlineEnabled) 0 else (outlineWidth * MPV_SUBTITLE_OUTLINE_SIZE_SCALE).toInt().coerceAtLeast(1)
+private fun SubtitleStyleState.toMpvSubtitleOutlineSize(): Int = when (edgeStyle) {
+    // A drop shadow is drawn by the shadow offset alone; leaving a border on top of it would
+    // give the user both effects when they picked one.
+    SubtitleEdgeStyle.None, SubtitleEdgeStyle.DropShadow -> 0
+    else -> (outlineWidth * MPV_SUBTITLE_OUTLINE_SIZE_SCALE).toInt().coerceAtLeast(1)
+}
+
+private fun SubtitleStyleState.toMpvSubtitleShadowOffset(): Int = when (edgeStyle) {
+    SubtitleEdgeStyle.DropShadow,
+    SubtitleEdgeStyle.OutlineAndShadow -> (outlineWidth * MPV_SUBTITLE_SHADOW_OFFSET_SCALE)
+        .toInt()
+        .coerceAtLeast(1)
+    // mpv has no raised/depressed edge. Both are approximated with a shadow, which is the
+    // closest thing it can draw, rather than being silently ignored.
+    SubtitleEdgeStyle.Raised, SubtitleEdgeStyle.Depressed -> 1
+    else -> 0
+}
 
 private fun SubtitleStyleState.toMpvSubtitleBorderStyle(): String =
-    if (outlineEnabled) {
-        "outline-and-shadow"
-    } else if (backgroundColor.alphaByte() > 0) {
+    if (edgeStyle == SubtitleEdgeStyle.None && effectiveBackgroundColor.alphaByte() > 0) {
         "opaque-box"
     } else {
         "outline-and-shadow"
     }
 
 private const val MPV_SUBTITLE_FONT_SIZE_SCALE = 55.0 / 18.0
-private const val MPV_SUBTITLE_FONT_SIZE_MIN = 36
+private const val MPV_SUBTITLE_FONT_SIZE_MIN = 12
 private const val MPV_SUBTITLE_FONT_SIZE_MAX = 122
 private const val MPV_SUBTITLE_OUTLINE_SIZE_SCALE = 1.5
+private const val MPV_SUBTITLE_SHADOW_OFFSET_SCALE = 1.5
 private const val LibmpvSurfaceResizeSettleDelayMs = 80L
 
 private fun buildAndroidLoadControl(memorySafeBufferEnabled: Boolean): DefaultLoadControl =
@@ -1816,16 +1832,30 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState) {
         setBottomPaddingFraction(bottomPaddingFraction)
         setStyle(
             CaptionStyleCompat(
-                style.textColor.toArgb(),
-                style.backgroundColor.toArgb(),
+                style.effectiveTextColor.toArgb(),
+                style.effectiveBackgroundColor.toArgb(),
                 android.graphics.Color.TRANSPARENT,
-                if (style.outlineEnabled) CaptionStyleCompat.EDGE_TYPE_OUTLINE else CaptionStyleCompat.EDGE_TYPE_NONE,
+                style.edgeStyle.toCaptionEdgeType(),
                 style.outlineColor.toArgb(),
                 style.toAndroidSubtitleTypeface(),
             )
         )
         setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, style.fontSizeSp.toFloat())
     }
+}
+
+/**
+ * CaptionStyleCompat has no combined outline-and-shadow edge, so that choice maps to a plain
+ * outline. Outline is the half a viewer actually reads by; silently dropping it in favour of
+ * the shadow would be the worse of the two compromises.
+ */
+private fun SubtitleEdgeStyle.toCaptionEdgeType(): Int = when (this) {
+    SubtitleEdgeStyle.None -> CaptionStyleCompat.EDGE_TYPE_NONE
+    SubtitleEdgeStyle.Outline,
+    SubtitleEdgeStyle.OutlineAndShadow -> CaptionStyleCompat.EDGE_TYPE_OUTLINE
+    SubtitleEdgeStyle.DropShadow -> CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW
+    SubtitleEdgeStyle.Raised -> CaptionStyleCompat.EDGE_TYPE_RAISED
+    SubtitleEdgeStyle.Depressed -> CaptionStyleCompat.EDGE_TYPE_DEPRESSED
 }
 
 private fun SubtitleStyleState.toAndroidSubtitleTypeface(): Typeface {

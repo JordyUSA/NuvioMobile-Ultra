@@ -175,6 +175,7 @@ final class MPVPlayerBridgeImpl: NSObject, NuvioPlayerBridge {
         backgroundColor: String,
         outlineColor: String,
         outlineSize: Float,
+        shadowOffset: Float,
         bold: Bool,
         fontSize: Float,
         fontFamily: String,
@@ -186,6 +187,7 @@ final class MPVPlayerBridgeImpl: NSObject, NuvioPlayerBridge {
             backgroundColor: backgroundColor,
             outlineColor: outlineColor,
             outlineSize: outlineSize,
+            shadowOffset: shadowOffset,
             bold: bold,
             fontSize: fontSize,
             fontFamily: fontFamily,
@@ -1146,6 +1148,7 @@ final class MPVPlayerViewController: UIViewController {
         backgroundColor: String,
         outlineColor: String,
         outlineSize: Float,
+        shadowOffset: Float,
         bold: Bool,
         fontSize: Float,
         fontFamily: String,
@@ -1158,7 +1161,14 @@ final class MPVPlayerViewController: UIViewController {
         checkError(mpv_set_property_string(mpv, "sub-color", textColor))
         checkError(mpv_set_property_string(mpv, "sub-back-color", backgroundColor))
         checkError(mpv_set_property_string(mpv, "sub-outline-color", outlineColor))
-        checkError(mpv_set_property_string(mpv, "sub-border-style", backgroundColor.hasPrefix("#00") ? "outline-and-shadow" : "opaque-box"))
+        // The shadow reuses the outline colour: Kotlin only offers one edge colour, and a
+        // shadow in a second unrelated colour is not something a user asked for.
+        checkError(mpv_set_property_string(mpv, "sub-shadow-color", outlineColor))
+        // opaque-box replaces the edge entirely, so it is only right when there is no edge to
+        // draw and the background is actually opaque.
+        let hasEdge = outlineSize > 0 || shadowOffset > 0
+        let borderStyle = (!hasEdge && !backgroundColor.hasPrefix("#00")) ? "opaque-box" : "outline-and-shadow"
+        checkError(mpv_set_property_string(mpv, "sub-border-style", borderStyle))
         setStringProperty("sub-bold", bold ? "yes" : "no")
         if let fontDirectory, !fontDirectory.isEmpty {
             checkError(mpv_set_property_string(mpv, "sub-fonts-dir", fontDirectory))
@@ -1167,6 +1177,9 @@ final class MPVPlayerViewController: UIViewController {
 
         var outline = Double(outlineSize)
         checkError(mpv_set_property(mpv, "sub-outline-size", MPV_FORMAT_DOUBLE, &outline))
+
+        var shadow = Double(shadowOffset)
+        checkError(mpv_set_property(mpv, "sub-shadow-offset", MPV_FORMAT_DOUBLE, &shadow))
 
         var size = Double(fontSize)
         checkError(mpv_set_property(mpv, "sub-font-size", MPV_FORMAT_DOUBLE, &size))
