@@ -1381,6 +1381,11 @@
     <string name="subtitle_language_unknown">Unknown</string>
     <string name="theme_amber">Amber</string>
     <string name="theme_crimson">Crimson</string>
+    <string name="theme_slate">Slate</string>
+    <string name="theme_mocha">Mocha</string>
+    <string name="theme_cosmos">Cosmos</string>
+    <string name="theme_citrus">Citrus</string>
+    <string name="theme_midnight">Midnight</string>
     <string name="theme_emerald">Emerald</string>
     <string name="theme_ocean">Ocean</string>
     <string name="theme_rose">Rose</string>
