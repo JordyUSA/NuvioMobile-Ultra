@@ -17,6 +17,7 @@ import com.nuvio.app.core.diagnostics.SentryInitializer
 import com.nuvio.app.core.deeplink.handleAppUrl
 import com.nuvio.app.core.network.DnsOverHttpsSettingsStorage
 import com.nuvio.app.core.storage.PlatformLocalAccountDataCleaner
+import com.nuvio.app.core.storage.AppCacheDirectories
 import com.nuvio.app.core.sync.SyncClientIdentityStorage
 import com.nuvio.app.core.ui.AppSystemUiController
 import com.nuvio.app.features.addons.AddonStorage
@@ -102,6 +103,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.setBackgroundDrawableResource(R.color.nuvio_background)
         SyncClientIdentityStorage.initialize(applicationContext)
+        AppCacheDirectories.initialize(applicationContext)
         // Cast initialisation is soft: on a device without Play services it leaves
         // CastPlatform.isSupported false and the UI omits the Cast button.
         CastPlatform.initialize(applicationContext)

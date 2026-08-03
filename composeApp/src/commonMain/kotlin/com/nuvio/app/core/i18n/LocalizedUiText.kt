@@ -162,6 +162,27 @@ fun localizedBadgeImportLimit(limit: Int): String =
 fun localizedP2pUnknownTorrentError(): String =
     resourceString("Unknown torrent error") { getString(Res.string.p2p_error_unknown) }
 
+/**
+ * Formats a byte count for display, one decimal place from KB up.
+ *
+ * Binary units with decimal labels, matching what the rest of the app has always shown — the
+ * download screen, the library and the cache controls all agree, which matters more here than
+ * the SI/IEC distinction.
+ */
+fun localizedByteSize(bytes: Long): String {
+    if (bytes <= 0L) return "0 ${localizedByteUnit("B")}"
+    val kib = 1024.0
+    val mib = kib * 1024.0
+    val gib = mib * 1024.0
+    val value = bytes.toDouble()
+    return when {
+        value >= gib -> "${((value / gib) * 10.0).toInt() / 10.0} ${localizedByteUnit("GB")}"
+        value >= mib -> "${((value / mib) * 10.0).toInt() / 10.0} ${localizedByteUnit("MB")}"
+        value >= kib -> "${((value / kib) * 10.0).toInt() / 10.0} ${localizedByteUnit("KB")}"
+        else -> "$bytes ${localizedByteUnit("B")}"
+    }
+}
+
 fun localizedByteUnit(unit: String): String =
     when (unit) {
         "GB" -> resourceString("GB") { getString(Res.string.unit_bytes_gb) }
