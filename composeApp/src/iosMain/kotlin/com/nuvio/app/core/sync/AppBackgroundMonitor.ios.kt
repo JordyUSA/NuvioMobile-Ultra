@@ -24,7 +24,7 @@ internal actual object AppBackgroundMonitor {
         }
 
         awaitClose {
-            observers.forEach(center::removeObserver)
+            observers.forEach { observer -> center.removeObserver(observer) }
         }
     }
 }

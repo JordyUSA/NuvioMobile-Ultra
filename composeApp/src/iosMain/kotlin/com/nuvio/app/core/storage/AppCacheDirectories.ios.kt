@@ -1,9 +1,12 @@
 package com.nuvio.app.core.storage
 
+import kotlinx.cinterop.ExperimentalForeignApi
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSHomeDirectory
 import platform.Foundation.NSURL
+import platform.Foundation.NSURLIsExcludedFromBackupKey
 
+@OptIn(ExperimentalForeignApi::class)
 internal actual object AppCacheDirectories {
     actual fun images(): String {
         val path = "${NSHomeDirectory().trimEnd('/')}/Library/Application Support/NuvioImageCache"
@@ -36,7 +39,7 @@ internal actual object AppCacheDirectories {
         runCatching {
             NSURL.fileURLWithPath(path).setResourceValue(
                 value = true,
-                forKey = platform.Foundation.NSURLIsExcludedFromBackupKey,
+                forKey = NSURLIsExcludedFromBackupKey,
                 error = null,
             )
         }
