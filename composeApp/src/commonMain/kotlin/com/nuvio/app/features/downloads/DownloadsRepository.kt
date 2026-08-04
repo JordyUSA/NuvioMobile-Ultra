@@ -2,7 +2,6 @@ package com.nuvio.app.features.downloads
 
 import com.nuvio.app.features.details.MetaDetails
 import com.nuvio.app.features.details.MetaDetailsRepository
-import com.nuvio.app.features.cast.probeCastMedia
 import com.nuvio.app.features.streams.StreamItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -570,10 +569,11 @@ object DownloadsRepository {
     /**
      * Reads container, codec and track detail out of a finished download.
      *
-     * Uses the same prober the Cast pipeline uses — MediaExtractor on Android, FFprobe on iOS —
-     * against the local file. Failure is expected and survivable: an exotic container simply
-     * leaves [DownloadItem.mediaInfo] null, and the resolution badge falls back to parsing the
-     * release name. Nothing about playback or the download itself depends on this succeeding.
+     * Reads the local file with MediaInfoLib where the build carries it, and the Cast pipeline's
+     * prober otherwise — MediaExtractor on Android, FFprobe on iOS. Failure is expected and
+     * survivable: an exotic container simply leaves [DownloadItem.mediaInfo] null, and the
+     * resolution badge falls back to parsing the release name. Nothing about playback or the
+     * download itself depends on this succeeding.
      */
     fun probeMediaInfo(downloadId: String) {
         val item = _uiState.value.items.firstOrNull { it.id == downloadId } ?: return
@@ -583,9 +583,9 @@ object DownloadsRepository {
 
         probeScope.launch {
             try {
-                val probe = probeCastMedia(localFileUri).getOrNull() ?: return@launch
+                val mediaInfo = probeDownloadMediaInfo(localFileUri) ?: return@launch
                 mutateItem(downloadId) { current ->
-                    current.copy(mediaInfo = probe.toDownloadMediaInfo())
+                    current.copy(mediaInfo = mediaInfo)
                 }
             } finally {
                 probesInFlight.remove(downloadId)
