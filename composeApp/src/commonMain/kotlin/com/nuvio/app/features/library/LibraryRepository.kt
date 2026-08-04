@@ -1,6 +1,7 @@
 package com.nuvio.app.features.library
 
 import co.touchlab.kermit.Logger
+import com.nuvio.app.core.ui.NuvioImageCache
 import com.nuvio.app.core.auth.AuthRepository
 import com.nuvio.app.core.ui.NuvioToastController
 import com.nuvio.app.core.auth.AuthState
@@ -555,6 +556,7 @@ object LibraryRepository {
             )
             localState.runIfTokenCurrent(localSnapshot.token) {
                 _uiState.value = newUiState
+                prefetchLibraryArtwork(newUiState.items)
             }
             return
         }
@@ -590,7 +592,17 @@ object LibraryRepository {
         )
         localState.runIfCurrent(localSnapshot) {
             _uiState.value = newUiState
+            prefetchLibraryArtwork(newUiState.items)
         }
+    }
+
+    /**
+     * Puts saved-library artwork on disk ahead of the user scrolling to it, so the library still
+     * renders after the device goes offline. [NuvioImageCache] drops URLs it has already seen, so
+     * the cost of calling this on every publish is a set lookup per item.
+     */
+    private fun prefetchLibraryArtwork(items: List<LibraryItem>) {
+        NuvioImageCache.prefetch(items.mapNotNull { it.poster })
     }
 
     private fun persist(snapshot: LibraryLocalSnapshot) {

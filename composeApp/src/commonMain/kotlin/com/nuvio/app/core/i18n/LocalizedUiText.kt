@@ -36,6 +36,15 @@ import nuvio.composeapp.generated.resources.date_month_short_may
 import nuvio.composeapp.generated.resources.date_month_short_nov
 import nuvio.composeapp.generated.resources.date_month_short_oct
 import nuvio.composeapp.generated.resources.date_month_short_sep
+import nuvio.composeapp.generated.resources.downloads_failure_file_write_failed
+import nuvio.composeapp.generated.resources.downloads_failure_link_expired
+import nuvio.composeapp.generated.resources.downloads_failure_no_connection
+import nuvio.composeapp.generated.resources.downloads_failure_not_found
+import nuvio.composeapp.generated.resources.downloads_failure_out_of_storage
+import nuvio.composeapp.generated.resources.downloads_failure_server_error
+import nuvio.composeapp.generated.resources.downloads_failure_timeout
+import nuvio.composeapp.generated.resources.downloads_failure_unknown
+import nuvio.composeapp.generated.resources.downloads_failure_unsupported
 import nuvio.composeapp.generated.resources.media_anime
 import nuvio.composeapp.generated.resources.media_channels
 import nuvio.composeapp.generated.resources.media_movie
@@ -161,6 +170,58 @@ fun localizedBadgeImportLimit(limit: Int): String =
 
 fun localizedP2pUnknownTorrentError(): String =
     resourceString("Unknown torrent error") { getString(Res.string.p2p_error_unknown) }
+
+/**
+ * Formats a byte count for display, one decimal place from KB up.
+ *
+ * Binary units with decimal labels, matching what the rest of the app has always shown — the
+ * download screen, the library and the cache controls all agree, which matters more here than
+ * the SI/IEC distinction.
+ */
+fun localizedByteSize(bytes: Long): String {
+    if (bytes <= 0L) return "0 ${localizedByteUnit("B")}"
+    val kib = 1024.0
+    val mib = kib * 1024.0
+    val gib = mib * 1024.0
+    val value = bytes.toDouble()
+    return when {
+        value >= gib -> "${((value / gib) * 10.0).toInt() / 10.0} ${localizedByteUnit("GB")}"
+        value >= mib -> "${((value / mib) * 10.0).toInt() / 10.0} ${localizedByteUnit("MB")}"
+        value >= kib -> "${((value / kib) * 10.0).toInt() / 10.0} ${localizedByteUnit("KB")}"
+        else -> "$bytes ${localizedByteUnit("B")}"
+    }
+}
+
+/**
+ * Resolves a [com.nuvio.app.features.downloads.DownloadFailureReason] name to display text.
+ *
+ * Takes the enum name rather than the enum so the i18n layer keeps its existing shape of plain
+ * string lookups and does not pull a feature type into core.
+ */
+fun localizedDownloadFailureReason(reasonName: String): String =
+    when (reasonName) {
+        "NoConnection" ->
+            resourceString("No internet connection") { getString(Res.string.downloads_failure_no_connection) }
+        "Timeout" ->
+            resourceString("The server stopped responding") { getString(Res.string.downloads_failure_timeout) }
+        "LinkExpired" ->
+            resourceString("This link has expired \u2014 pick the stream again") {
+                getString(Res.string.downloads_failure_link_expired)
+            }
+        "NotFound" ->
+            resourceString("The file is no longer available") { getString(Res.string.downloads_failure_not_found) }
+        "ServerError" ->
+            resourceString("The server had a problem") { getString(Res.string.downloads_failure_server_error) }
+        "OutOfStorage" ->
+            resourceString("Not enough storage on this device") {
+                getString(Res.string.downloads_failure_out_of_storage)
+            }
+        "FileWriteFailed" ->
+            resourceString("Couldn't save the file") { getString(Res.string.downloads_failure_file_write_failed) }
+        "Unsupported" ->
+            resourceString("This stream can't be downloaded") { getString(Res.string.downloads_failure_unsupported) }
+        else -> resourceString("Download failed") { getString(Res.string.downloads_failure_unknown) }
+    }
 
 fun localizedByteUnit(unit: String): String =
     when (unit) {

@@ -258,6 +258,20 @@ val iosDistributionSourceDir = if (iosDistribution == "full") {
 val iosFrameworkBundleId = "com.nuvio.media"
 val nuvioEngineAppleFramework = rootProject.file("../nuvio-engine/platform/apple/NuvioEngine.xcframework")
 val fullCommonSourceDir = project.file("src/fullCommonMain/kotlin")
+
+// In-app trailer playback used to live inside the "full" distribution, which meant CI builds —
+// forced onto "appstore" because NuvioEngine.xcframework is not in this repository — silently
+// handed every trailer to YouTube instead of playing it.
+//
+// Nothing about the trailer path needs the native engine: the extractor is kermit, coroutines and
+// kotlinx.serialization, the iOS transport is Ktor and Foundation, and the hero surface drives the
+// same mpv bridge the player already uses on both distributions. So it is its own source set now,
+// independent of which distribution is being built.
+//
+// iOS gets it unconditionally. Android does not: androidPlaystore still supplies its own stub
+// resolver, and Play's policy on this is the reason that stub exists.
+val trailerCommonSourceDir = project.file("src/trailerCommon/kotlin")
+val iosTrailerSourceDir = project.file("src/iosTrailer/kotlin")
 val generatedRuntimeConfigDir = layout.buildDirectory.dir("generated/runtime-config/kotlin")
 val requestedGradleTasks = gradle.startParameter.taskNames.map { taskName ->
     taskName.substringAfterLast(':').lowercase()
@@ -438,6 +452,8 @@ kotlin {
             if (iosDistribution == "full") {
                 defaultSourceSet.kotlin.srcDir(fullCommonSourceDir)
             }
+            defaultSourceSet.kotlin.srcDir(trailerCommonSourceDir)
+            defaultSourceSet.kotlin.srcDir(iosTrailerSourceDir)
             defaultSourceSet.kotlin.srcDir(project.file(iosDistributionSourceDir))
             defaultSourceSet.dependencies {
                 implementation(libs.ktor.client.darwin)
@@ -477,6 +493,7 @@ kotlin {
             kotlin.srcDir(project.file(ffmpegSourceDir))
             if (androidDistribution == "full") {
                 kotlin.srcDir(fullCommonSourceDir)
+                kotlin.srcDir(trailerCommonSourceDir)
             }
 
             dependencies {

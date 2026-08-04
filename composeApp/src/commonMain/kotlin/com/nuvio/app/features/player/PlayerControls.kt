@@ -2,6 +2,7 @@ package com.nuvio.app.features.player
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -50,12 +51,16 @@ import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderColors
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
@@ -820,6 +825,12 @@ private fun ProgressControls(
                 onValueChangeFinished = { onScrubFinished(displayedPositionMs.coerceIn(0L, durationMs)) },
                 valueRange = 0f..durationMs.toFloat(),
                 enabled = seekableDurationMs != null,
+                track = { sliderState ->
+                    BufferedSliderTrack(
+                        sliderState = sliderState,
+                        bufferedFraction = bufferedFraction(playbackSnapshot, seekableDurationMs),
+                    )
+                },
             )
         }
         Row(
@@ -912,6 +923,63 @@ private fun ProgressControls(
                 }
             }
         }
+    }
+}
+
+/**
+ * How much of the timeline is already on disk or in the buffer, as a 0..1 fraction.
+ *
+ * Returns 0 for an unseekable source: a live stream has no meaningful "ahead", and drawing a
+ * band against an unknown duration would be inventing a number.
+ */
+private fun bufferedFraction(
+    playbackSnapshot: PlayerPlaybackSnapshot,
+    seekableDurationMs: Long?,
+): Float {
+    val duration = seekableDurationMs ?: return 0f
+    if (duration <= 0L) return 0f
+    return (playbackSnapshot.bufferedPositionMs.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+}
+
+/**
+ * The stock Material track with a buffered band drawn behind the played portion.
+ *
+ * The band is painted underneath rather than over the top so the played position stays the
+ * brightest thing on the bar; buffering is context, not the thing the user is tracking. The
+ * stock track keeps its own geometry by having its inactive colour made transparent and the
+ * base drawn here instead, which avoids hard-coding a track height that Material can change.
+ */
+@Composable
+private fun BufferedSliderTrack(
+    sliderState: SliderState,
+    bufferedFraction: Float,
+    colors: SliderColors = SliderDefaults.colors(),
+    enabled: Boolean = true,
+) {
+    val inactiveColor = if (enabled) colors.inactiveTrackColor else colors.disabledInactiveTrackColor
+    val bufferedColor = (if (enabled) colors.activeTrackColor else colors.disabledActiveTrackColor)
+        .copy(alpha = 0.38f)
+
+    Box(contentAlignment = Alignment.CenterStart) {
+        Canvas(modifier = Modifier.matchParentSize()) {
+            val radius = CornerRadius(size.height / 2f, size.height / 2f)
+            drawRoundRect(color = inactiveColor, cornerRadius = radius)
+            if (bufferedFraction > 0f) {
+                drawRoundRect(
+                    color = bufferedColor,
+                    size = Size(size.width * bufferedFraction, size.height),
+                    cornerRadius = radius,
+                )
+            }
+        }
+        SliderDefaults.Track(
+            sliderState = sliderState,
+            enabled = enabled,
+            colors = colors.copy(
+                inactiveTrackColor = Color.Transparent,
+                disabledInactiveTrackColor = Color.Transparent,
+            ),
+        )
     }
 }
 
@@ -1032,6 +1100,14 @@ internal fun LockedPlayerOverlay(
                 valueRange = 0f..durationMs.toFloat(),
                 enabled = false,
                 colors = sliderColors,
+                track = { sliderState ->
+                    BufferedSliderTrack(
+                        sliderState = sliderState,
+                        bufferedFraction = bufferedFraction(playbackSnapshot, seekableDurationMs),
+                        colors = sliderColors,
+                        enabled = false,
+                    )
+                },
             )
             Row(
                 modifier = Modifier

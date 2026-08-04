@@ -59,6 +59,7 @@ import nuvio.composeapp.generated.resources.action_reorder
 import nuvio.composeapp.generated.resources.action_reset
 import nuvio.composeapp.generated.resources.settings_homescreen_hidden
 import nuvio.composeapp.generated.resources.settings_homescreen_visible
+import nuvio.composeapp.generated.resources.settings_meta_tab_group_full
 import nuvio.composeapp.generated.resources.settings_meta_actions
 import nuvio.composeapp.generated.resources.settings_meta_actions_description
 import nuvio.composeapp.generated.resources.settings_meta_cast
@@ -398,25 +399,38 @@ private fun MetaSectionRow(
             enter = expandVertically(),
             exit = shrinkVertically(),
         ) {
-            FlowRow(
-                modifier = Modifier.padding(top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                TabGroupChip(
-                    label = stringResource(Res.string.settings_meta_none),
-                    selected = item.tabGroup == null,
-                    onClick = { onTabGroupChange(null) },
-                )
-                for (groupId in 1..3) {
-                    val currentCount = groupCounts[groupId] ?: 0
-                    val isSelected = item.tabGroup == groupId
-                    val isFull = currentCount >= 3 && !isSelected
+            Column(modifier = Modifier.padding(top = 8.dp)) {
+                var anyGroupFull = false
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     TabGroupChip(
-                        label = stringResource(Res.string.settings_meta_group_label, groupId),
-                        selected = isSelected,
-                        enabled = !isFull,
-                        onClick = { onTabGroupChange(groupId) },
+                        label = stringResource(Res.string.settings_meta_none),
+                        selected = item.tabGroup == null,
+                        onClick = { onTabGroupChange(null) },
+                    )
+                    for (groupId in 1..3) {
+                        val currentCount = groupCounts[groupId] ?: 0
+                        val isSelected = item.tabGroup == groupId
+                        val isFull = currentCount >= 3 && !isSelected
+                        if (isFull) anyGroupFull = true
+                        TabGroupChip(
+                            label = stringResource(Res.string.settings_meta_group_label, groupId),
+                            selected = isSelected,
+                            enabled = !isFull,
+                            onClick = { onTabGroupChange(groupId) },
+                        )
+                    }
+                }
+                // A chip that simply stops responding reads as a bug; the three-per-group cap
+                // is nowhere else in the UI.
+                if (anyGroupFull) {
+                    Text(
+                        text = stringResource(Res.string.settings_meta_tab_group_full),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp),
                     )
                 }
             }

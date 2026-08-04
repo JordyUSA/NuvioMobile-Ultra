@@ -54,6 +54,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
+import com.nuvio.app.core.ui.NuvioAsyncImage
 import com.nuvio.app.core.ui.NuvioLoadingIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -86,10 +87,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil3.compose.AsyncImage
 import com.nuvio.app.core.i18n.localizedMonthName
 import com.nuvio.app.core.i18n.localizedShortMonthName
-import com.nuvio.app.core.i18n.localizedByteUnit
+import com.nuvio.app.core.i18n.localizedByteSize
 import com.nuvio.app.core.network.NetworkCondition
 import com.nuvio.app.core.network.NetworkStatusRepository
 import com.nuvio.app.core.ui.DisintegratingContainer
@@ -137,6 +137,7 @@ import com.nuvio.app.features.downloads.buildDownloadsListEntries
 import com.nuvio.app.features.downloads.downloadProgressInfoLines
 import com.nuvio.app.features.downloads.formatDownloadBytes
 import com.nuvio.app.features.downloads.originalFormatLabel
+import com.nuvio.app.features.downloads.resolutionBadge
 import com.nuvio.app.features.downloads.sortedForSeriesDownloads
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.PosterShape
@@ -1073,6 +1074,14 @@ private fun LazyListScope.downloadsLibraryContent(
                 )
                 val downloadsEntry = DownloadsListEntry.Download(representative)
                 val isSelected = selectionMode && downloadsEntry.entryId in selectedIds
+                // A show tile stands for every episode under it, so it may only claim a
+                // resolution they all share — otherwise one 720p episode in an otherwise 1080p
+                // season would be advertised as the whole show's quality, or vice versa.
+                val entryResolutionBadge = when (entry) {
+                    is LibraryDownloadDisplayEntry.Movie -> representative.resolutionBadge()
+                    is LibraryDownloadDisplayEntry.Show ->
+                        entry.group.episodes.map { it.resolutionBadge() }.distinct().singleOrNull()
+                }
 
                 DisintegratingContainer(
                     disintegrating = disintegratingDownloadKey == entry.key,
@@ -1082,6 +1091,7 @@ private fun LazyListScope.downloadsLibraryContent(
                         HomePosterCard(
                             item = libraryItem.toMetaPreview(),
                             isWatched = false,
+                            topStartBadge = entryResolutionBadge,
                             onClick = if (disintegratingDownloadKey == entry.key) {
                                 null
                             } else {
@@ -1593,8 +1603,8 @@ private fun LibraryConversionCard(
             contentAlignment = Alignment.Center,
         ) {
             if (!job.poster.isNullOrBlank()) {
-                AsyncImage(
-                    model = job.poster,
+                NuvioAsyncImage(
+                    imageUrl = job.poster,
                     contentDescription = job.title,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
@@ -1792,8 +1802,8 @@ private fun DownloadedEpisodeCard(
                 .aspectRatio(16f / 9f),
         ) {
             if (artwork != null) {
-                AsyncImage(
-                    model = artwork,
+                NuvioAsyncImage(
+                    imageUrl = artwork,
                     contentDescription = item.episodeTitle ?: item.title,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
@@ -1827,6 +1837,23 @@ private fun DownloadedEpisodeCard(
                             fontWeight = FontWeight.SemiBold,
                         )
                     }
+                }
+            }
+            item.resolutionBadge()?.let { badge ->
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp),
+                    shape = RoundedCornerShape(999.dp),
+                    color = Color.Black.copy(alpha = 0.58f),
+                    contentColor = Color.White,
+                ) {
+                    Text(
+                        text = badge,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
             }
             DownloadsSelectionBadge(
@@ -1908,8 +1935,8 @@ private fun LibraryActiveDownloadCard(
             contentAlignment = Alignment.Center,
         ) {
             if (!artwork.isNullOrBlank()) {
-                AsyncImage(
-                    model = artwork,
+                NuvioAsyncImage(
+                    imageUrl = artwork,
                     contentDescription = item.downloadDisplayTitle(),
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
@@ -2621,19 +2648,7 @@ private fun cloudLibraryTypeLabel(type: CloudLibraryItemType): String =
         CloudLibraryItemType.File -> stringResource(Res.string.cloud_library_type_files)
     }
 
-private fun formatCloudBytes(bytes: Long): String {
-    if (bytes <= 0L) return "0 ${localizedByteUnit("B")}"
-    val kib = 1024.0
-    val mib = kib * 1024.0
-    val gib = mib * 1024.0
-    val value = bytes.toDouble()
-    return when {
-        value >= gib -> "${((value / gib) * 10.0).toInt() / 10.0} ${localizedByteUnit("GB")}"
-        value >= mib -> "${((value / mib) * 10.0).toInt() / 10.0} ${localizedByteUnit("MB")}"
-        value >= kib -> "${((value / kib) * 10.0).toInt() / 10.0} ${localizedByteUnit("KB")}"
-        else -> "$bytes ${localizedByteUnit("B")}"
-    }
-}
+private fun formatCloudBytes(bytes: Long): String = localizedByteSize(bytes)
 
 private fun String.toDisplayStatus(): String =
     replace('_', ' ')
@@ -3454,8 +3469,8 @@ private fun LibraryCalendarEventArtwork(event: LibraryCalendarEvent) {
         contentAlignment = Alignment.Center,
     ) {
         if (!event.imageUrl.isNullOrBlank()) {
-            AsyncImage(
-                model = event.imageUrl,
+            NuvioAsyncImage(
+                imageUrl = event.imageUrl,
                 contentDescription = event.title,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,

@@ -1,5 +1,6 @@
 package com.nuvio.app.features.settings
 
+import com.nuvio.app.core.ui.AppOrientationController
 import com.nuvio.app.core.ui.AppTheme
 import com.nuvio.app.core.ui.NativeTabBridge
 import com.nuvio.app.core.ui.ThemeColors
@@ -23,6 +24,11 @@ object ThemeSettingsRepository {
 
     private val _amoledEnabled = MutableStateFlow(false)
     val amoledEnabled: StateFlow<Boolean> = _amoledEnabled.asStateFlow()
+
+    // Defaults to true because that is what both platforms already did before this setting
+    // existed; turning it on must not be a behaviour change for anyone.
+    private val _autoRotateEnabled = MutableStateFlow(true)
+    val autoRotateEnabled: StateFlow<Boolean> = _autoRotateEnabled.asStateFlow()
 
     private val _liquidGlassNativeTabBarEnabled = MutableStateFlow(false)
     val liquidGlassNativeTabBarEnabled: StateFlow<Boolean> = _liquidGlassNativeTabBarEnabled.asStateFlow()
@@ -53,6 +59,7 @@ object ThemeSettingsRepository {
         _customThemeFirstColor.value = ThemeAccentColor.PINK.color
         _customThemeSecondColor.value = ThemeAccentColor.CYAN.color
         _amoledEnabled.value = false
+        _autoRotateEnabled.value = true
         _liquidGlassNativeTabBarEnabled.value = false
         _liquidGlassAutoHideOnScrollEnabled.value = false
         NativeTabBridge.publishAccentColor(AppTheme.WHITE.nativeTabAccentHex())
@@ -72,6 +79,8 @@ object ThemeSettingsRepository {
             .toThemeColor(ThemeAccentColor.CYAN.color)
         NativeTabBridge.publishAccentColor(theme.nativeTabAccentHex(_customThemeFirstColor.value))
         _amoledEnabled.value = ThemeSettingsStorage.loadAmoledEnabled() ?: false
+        _autoRotateEnabled.value = ThemeSettingsStorage.loadAutoRotateEnabled() ?: true
+        AppOrientationController.setAutoRotateEnabled(_autoRotateEnabled.value)
         val liquidGlassEnabled = ThemeSettingsStorage.loadLiquidGlassNativeTabBarEnabled() ?: false
         _liquidGlassNativeTabBarEnabled.value = liquidGlassEnabled
         _liquidGlassAutoHideOnScrollEnabled.value =
@@ -113,6 +122,14 @@ object ThemeSettingsRepository {
         if (_amoledEnabled.value == enabled) return
         _amoledEnabled.value = enabled
         ThemeSettingsStorage.saveAmoledEnabled(enabled)
+    }
+
+    fun setAutoRotateEnabled(enabled: Boolean) {
+        ensureLoaded()
+        if (_autoRotateEnabled.value == enabled) return
+        _autoRotateEnabled.value = enabled
+        ThemeSettingsStorage.saveAutoRotateEnabled(enabled)
+        AppOrientationController.setAutoRotateEnabled(enabled)
     }
 
     fun setLiquidGlassNativeTabBar(enabled: Boolean) {

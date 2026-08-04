@@ -1,0 +1,243 @@
+name: Build MediaInfo AAR
+
+# MediaInfoLib (https://github.com/MediaArea/MediaInfoLib) reads far more out of a container than
+# Android's own MediaExtractor does — Dolby Vision and HDR10+ flags, real codec profiles, subtitle
+# tracks, per-track titles — and unlike FFmpeg it is BSD-2-Clause, so it can ship in the app
+# without touching its licensing.
+#
+# MediaArea publishes no Maven artifact, so the native libraries are built here and consumed as a
+# prebuilt AAR, exactly like the FFmpegKit one.
+#
+# Download the artifact, drop lib-mediainfo-<sha>.aar into composeApp/libs/, and the existing
+# fileTree("libs", "lib-*.aar") dependency picks it up. Nothing else changes: the Kotlin side
+# loads the library reflectively and falls back to MediaExtractor when it is absent, so a
+# checkout without the AAR builds and runs exactly as it does today.
+
+on:
+  # workflow_dispatch alone is not enough: GitHub only offers a manual trigger for workflows that
+  # exist on the default branch, so on a feature branch this file would be invisible in the
+  # Actions tab. The push trigger is scoped to the sources this job actually compiles.
+  push:
+    paths:
+      - '.github/workflows/build-mediainfo.yml'
+      - 'composeApp/src/androidMain/jni/**'
+  workflow_dispatch:
+    inputs:
+      mediainfolib_ref:
+        description: 'MediaInfoLib git ref'
+        required: true
+        default: 'master'
+      zenlib_ref:
+        description: 'ZenLib git ref'
+        required: true
+        default: 'master'
+      abis:
+        description: 'Comma-separated Android ABIs'
+        required: true
+        default: 'arm64-v8a,armeabi-v7a,x86_64'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      # Any reasonably current NDK works — this is a plain C++ library with no assembly and no
+      # toolchain-version sensitivity, which is why it needs none of the pinning FFmpegKit does.
+      NDK_VERSION: '27.0.12077973'
+      # Matches android-minSdk in gradle/libs.versions.toml.
+      API_LEVEL: '24'
+      MEDIAINFOLIB_REF: ${{ inputs.mediainfolib_ref || 'master' }}
+      ZENLIB_REF: ${{ inputs.zenlib_ref || 'master' }}
+      ABIS: ${{ inputs.abis || 'arm64-v8a,armeabi-v7a,x86_64' }}
+
+    steps:
+      - name: Checkout Nuvio
+        uses: actions/checkout@v4
+        with:
+          path: nuvio
+
+      - name: Checkout ZenLib
+        uses: actions/checkout@v4
+        with:
+          repository: MediaArea/ZenLib
+          ref: ${{ env.ZENLIB_REF }}
+          path: src/ZenLib
+
+      - name: Checkout MediaInfoLib
+        # Must sit beside ZenLib: MediaInfoLib's CMake project reaches for ../../../ZenLib rather
+        # than looking for an installed copy.
+        uses: actions/checkout@v4
+        with:
+          repository: MediaArea/MediaInfoLib
+          ref: ${{ env.MEDIAINFOLIB_REF }}
+          path: src/MediaInfoLib
+
+      - name: Record the resolved commits
+        id: revs
+        run: |
+          set -euo pipefail
+          zen="$(git -C src/ZenLib rev-parse --short HEAD)"
+          mil="$(git -C src/MediaInfoLib rev-parse --short HEAD)"
+          echo "zenlib=$zen" >> "$GITHUB_OUTPUT"
+          echo "mediainfolib=$mil" >> "$GITHUB_OUTPUT"
+          echo "ZenLib $zen, MediaInfoLib $mil"
+
+      - name: Install the Android NDK
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          manager="$(find "$sdk_root/cmdline-tools" -name sdkmanager -type f -print -quit)"
+          if [ -z "$manager" ]; then
+            echo "::error::sdkmanager not found under $sdk_root/cmdline-tools"
+            exit 1
+          fi
+          yes | "$manager" --licenses >/dev/null 2>&1 || true
+          "$manager" --install "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_ROOT=$sdk_root/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Build each ABI
+        run: |
+          set -euo pipefail
+
+          toolchain="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake"
+          test -f "$toolchain" || { echo "::error::NDK toolchain file missing at $toolchain"; exit 1; }
+
+          root="$PWD"
+          mkdir -p "$root/out/jni"
+
+          # UNICODE selects wchar_t for ZenLib's Char, and therefore for every MediaInfoLib
+          # signature that carries a string. It is forced on here rather than left to each
+          # project's default so the shim cannot end up disagreeing with the libraries it links
+          # against — that mismatch links cleanly and then corrupts every string at runtime.
+          unicode_flags="-DUNICODE -D_UNICODE"
+
+          IFS=',' read -ra abis <<< "$ABIS"
+          for abi in "${abis[@]}"; do
+            abi="$(echo "$abi" | xargs)"
+            [ -n "$abi" ] || continue
+            echo "::group::$abi"
+
+            build="$root/build/$abi"
+            rm -rf "$build"
+
+            # One configure covers both libraries: BUILD_ZENLIB pulls the sibling checkout into
+            # the same tree, so there is no install step and no chance of the two being built
+            # with different flags.
+            cmake -S "$root/src/MediaInfoLib/Project/CMake" -B "$build" \
+              -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
+              -DANDROID_ABI="$abi" \
+              -DANDROID_PLATFORM="android-${API_LEVEL}" \
+              -DANDROID_STL=c++_static \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DBUILD_ZENLIB=ON \
+              -DBUILD_ZLIB=OFF \
+              -DCMAKE_CXX_FLAGS="$unicode_flags -ffunction-sections -fdata-sections" \
+              -DCMAKE_C_FLAGS="-ffunction-sections -fdata-sections"
+
+            cmake --build "$build" --parallel "$(nproc)"
+
+            mediainfo_a="$(find "$build" -name 'libmediainfo.a' -print -quit)"
+            zen_a="$(find "$build" -name 'libzen.a' -print -quit)"
+            if [ -z "$mediainfo_a" ] || [ -z "$zen_a" ]; then
+              echo "::error::$abi: expected libmediainfo.a and libzen.a; found '$mediainfo_a' '$zen_a'"
+              find "$build" -name '*.a' | head -50
+              exit 1
+            fi
+
+            # MediaInfoLib depends on ZenLib, so it has to come first for a static link.
+            shim="$root/build/shim-$abi"
+            rm -rf "$shim"
+            cmake -S "$root/nuvio/composeApp/src/androidMain/jni" -B "$shim" \
+              -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
+              -DANDROID_ABI="$abi" \
+              -DANDROID_PLATFORM="android-${API_LEVEL}" \
+              -DANDROID_STL=c++_static \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DMEDIAINFO_INCLUDE_DIRS="$root/src/MediaInfoLib/Source;$root/src/ZenLib/Source" \
+              -DMEDIAINFO_LIBRARIES="$mediainfo_a;$zen_a" \
+              -DCMAKE_CXX_FLAGS="$unicode_flags"
+
+            cmake --build "$shim" --parallel "$(nproc)"
+
+            so="$(find "$shim" -name 'libmediainfo_jni.so' -print -quit)"
+            test -n "$so" || { echo "::error::$abi: shim produced no libmediainfo_jni.so"; exit 1; }
+
+            "$ANDROID_NDK_ROOT"/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip \
+              --strip-unneeded "$so"
+
+            mkdir -p "$root/out/jni/$abi"
+            cp "$so" "$root/out/jni/$abi/"
+            ls -lh "$root/out/jni/$abi/"
+            echo "::endgroup::"
+          done
+
+      - name: Verify the shim exports its entry point
+        run: |
+          set -euo pipefail
+          missing=0
+          for so in out/jni/*/libmediainfo_jni.so; do
+            if "$ANDROID_NDK_ROOT"/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm \
+                 --dynamic --defined-only "$so" \
+                 | grep -q 'Java_com_nuvio_app_features_downloads_MediaInfoNative_nativeInformJson'; then
+              echo "ok: $so"
+            else
+              echo "::error::$so does not export nativeInformJson"
+              missing=1
+            fi
+          done
+          test "$missing" -eq 0
+
+      - name: Package the AAR
+        id: package
+        run: |
+          set -euo pipefail
+          name="lib-mediainfo-${{ steps.revs.outputs.mediainfolib }}"
+
+          mkdir -p aar/META-INF
+          cp -r out/jni aar/jni
+          cat > aar/AndroidManifest.xml <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="net.mediaarea.mediainfo">
+              <uses-sdk android:minSdkVersion="24" />
+          </manifest>
+          XML
+
+          # AGP expects a classes.jar even when an AAR carries nothing but native libraries.
+          printf 'Manifest-Version: 1.0\n\n' > aar/META-INF/MANIFEST.MF
+          (cd aar && zip -qr classes.jar META-INF && rm -rf META-INF)
+
+          cp src/MediaInfoLib/License.html aar/LICENSE.html 2>/dev/null \
+            || cp src/MediaInfoLib/LICENSE aar/LICENSE 2>/dev/null || true
+
+          mkdir -p dist
+          (cd aar && zip -qr "../dist/$name.aar" .)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          unzip -l "dist/$name.aar"
+          ls -lh dist
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: dist/*.aar
+          retention-days: 90
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "## MediaInfo AAR built"
+            echo ""
+            echo "- MediaInfoLib \`${{ env.MEDIAINFOLIB_REF }}\` at \`${{ steps.revs.outputs.mediainfolib }}\`"
+            echo "- ZenLib \`${{ env.ZENLIB_REF }}\` at \`${{ steps.revs.outputs.zenlib }}\`"
+            echo "- ABIs: \`${{ env.ABIS }}\`"
+            echo ""
+            echo '1. Download the artifact and unzip it.'
+            echo '2. Put `lib-mediainfo-*.aar` in `composeApp/libs/`.'
+            echo '3. Build as usual — no flag, no Gradle change. Downloads probed after that'
+            echo '   point report codec profiles, HDR format and subtitle tracks; without the'
+            echo '   AAR the app keeps using MediaExtractor.'
+          } >> "$GITHUB_STEP_SUMMARY"

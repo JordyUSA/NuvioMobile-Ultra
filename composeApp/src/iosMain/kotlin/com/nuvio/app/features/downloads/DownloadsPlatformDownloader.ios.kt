@@ -20,6 +20,7 @@ import nuvio.composeapp.generated.resources.downloads_error_partial_file_not_ope
 import nuvio.composeapp.generated.resources.downloads_error_write_partial_file_failed
 import nuvio.composeapp.generated.resources.network_request_failed_http
 import org.jetbrains.compose.resources.getString
+import platform.Foundation.NSCocoaErrorDomain
 import platform.Foundation.NSError
 import platform.Foundation.NSDate
 import platform.Foundation.NSData
@@ -71,7 +72,7 @@ internal actual object DownloadsPlatformDownloader {
         request: DownloadPlatformRequest,
         onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
         onSuccess: (localFileUri: String, totalBytes: Long?) -> Unit,
-        onFailure: (message: String) -> Unit,
+        onFailure: (reason: DownloadFailureReason, detail: String) -> Unit,
     ): DownloadsTaskHandle {
         val job = SupervisorJob()
         val scope = CoroutineScope(job + Dispatchers.Default)
@@ -110,7 +111,7 @@ internal actual object DownloadsPlatformDownloader {
                 }
 
                 if (result.statusCode !in 200..299) {
-                    error(runBlocking { getString(Res.string.network_request_failed_http, result.statusCode) })
+                    throw IosDownloadHttpException(result.statusCode)
                 }
 
                 val isPartialResume = attemptedRangeRequest && result.statusCode == 206 && resumeFromBytes > 0L
@@ -129,7 +130,9 @@ internal actual object DownloadsPlatformDownloader {
                     error = null,
                 )
                 if (!moved) {
-                    error(runBlocking { getString(Res.string.downloads_error_finalize_file_failed) })
+                    throw IosDownloadFileException(
+                        runBlocking { getString(Res.string.downloads_error_finalize_file_failed) },
+                    )
                 }
 
                 val localFileUri = NSURL.fileURLWithPath(destinationPath).absoluteString ?: "file://$destinationPath"
@@ -138,7 +141,10 @@ internal actual object DownloadsPlatformDownloader {
             } catch (_: CancellationException) {
                 handle.cancelNativeTask()
             } catch (error: Throwable) {
-                onFailure(error.message ?: runBlocking { getString(Res.string.download_failed) })
+                onFailure(
+                    error.toDownloadFailureReason(),
+                    error.message ?: runBlocking { getString(Res.string.download_failed) },
+                )
             }
         }
 
@@ -379,7 +385,7 @@ private class IosDownloadDelegate(
             )
 
             outputFile = fopen(tempPath, if (isPartialResume) "ab" else "wb") ?: run {
-                fileError = IllegalStateException(runBlocking { getString(Res.string.downloads_error_open_partial_file_failed) })
+                fileError = IosDownloadFileException(runBlocking { getString(Res.string.downloads_error_open_partial_file_failed) })
                 null
             }
 
@@ -397,7 +403,7 @@ private class IosDownloadDelegate(
         if (fileError != null) return
 
         val file = outputFile ?: run {
-            fileError = IllegalStateException(runBlocking { getString(Res.string.downloads_error_partial_file_not_open) })
+            fileError = IosDownloadFileException(runBlocking { getString(Res.string.downloads_error_partial_file_not_open) })
             return
         }
 
@@ -409,7 +415,7 @@ private class IosDownloadDelegate(
             file,
         ).toLong()
         if (wrote != bytesToWrite) {
-            fileError = IllegalStateException(runBlocking { getString(Res.string.downloads_error_write_partial_file_failed) })
+            fileError = IosDownloadFileException(runBlocking { getString(Res.string.downloads_error_write_partial_file_failed) })
             return
         }
 
@@ -428,8 +434,14 @@ private class IosDownloadDelegate(
         closeOutputFile()
 
         if (didCompleteWithError != null) {
+            // The NSError code is the only thing that distinguishes "no network" from
+            // "server hung up", so it is carried through rather than flattened to a string.
             completion.completeExceptionally(
-                IllegalStateException(didCompleteWithError.localizedDescription),
+                IosDownloadNetworkException(
+                    domain = didCompleteWithError.domain,
+                    code = didCompleteWithError.code,
+                    detail = didCompleteWithError.localizedDescription,
+                ),
             )
             return
         }
@@ -630,3 +642,51 @@ private fun parseContentRangeTotal(headerValue: String?): Long? {
     if (totalPart == "*") return null
     return totalPart.toLongOrNull()?.takeIf { it > 0L }
 }
+
+private class IosDownloadHttpException(
+    val statusCode: Int,
+) : IllegalStateException(
+    runBlocking { getString(Res.string.network_request_failed_http, statusCode) },
+)
+
+private class IosDownloadNetworkException(
+    val domain: String?,
+    val code: Long,
+    detail: String,
+) : IllegalStateException(detail)
+
+private class IosDownloadFileException(detail: String) : IllegalStateException(detail)
+
+/**
+ * Classifies a download failure into something worth showing the user.
+ *
+ * The NSURLError codes below are the ones that mean materially different things to someone
+ * looking at a failed download: no network at all, a server that went quiet, or TLS refusing
+ * the connection. Everything else stays Unknown, with the raw description kept as the detail.
+ */
+private fun Throwable.toDownloadFailureReason(): DownloadFailureReason = when {
+    this is IosDownloadHttpException -> downloadFailureReasonForHttpStatus(statusCode)
+    this is IosDownloadFileException -> DownloadFailureReason.FileWriteFailed
+    this is IosDownloadNetworkException -> when {
+        domain == NSCocoaErrorDomain && code == NSFileWriteOutOfSpaceErrorCode ->
+            DownloadFailureReason.OutOfStorage
+        code == NSURLErrorNotConnectedToInternet ||
+            code == NSURLErrorCannotFindHost ||
+            code == NSURLErrorCannotConnectToHost ||
+            code == NSURLErrorDataNotAllowed -> DownloadFailureReason.NoConnection
+        code == NSURLErrorTimedOut || code == NSURLErrorNetworkConnectionLost ->
+            DownloadFailureReason.Timeout
+        code == NSURLErrorSecureConnectionFailed -> DownloadFailureReason.NoConnection
+        else -> DownloadFailureReason.Unknown
+    }
+    else -> DownloadFailureReason.Unknown
+}
+
+private const val NSURLErrorTimedOut = -1001L
+private const val NSURLErrorCannotFindHost = -1003L
+private const val NSURLErrorCannotConnectToHost = -1004L
+private const val NSURLErrorNetworkConnectionLost = -1005L
+private const val NSURLErrorNotConnectedToInternet = -1009L
+private const val NSURLErrorDataNotAllowed = -1020L
+private const val NSURLErrorSecureConnectionFailed = -1200L
+private const val NSFileWriteOutOfSpaceErrorCode = 640L

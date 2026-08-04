@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -29,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -146,6 +148,8 @@ fun NuvioPosterCard(
     bottomLeftLogoUrl: String? = null,
     bottomLeftText: String? = null,
     isWatched: Boolean = false,
+    /** Short corner label, e.g. a resolution on a downloaded file. */
+    topStartBadge: String? = null,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -178,8 +182,8 @@ fun NuvioPosterCard(
             contentAlignment = Alignment.Center,
         ) {
             if (imageUrl != null) {
-                AsyncImage(
-                    model = imageUrl,
+                NuvioAsyncImage(
+                    imageUrl = imageUrl,
                     contentDescription = title,
                     modifier = Modifier.matchParentSize(),
                     contentScale = ContentScale.Crop,
@@ -222,6 +226,21 @@ fun NuvioPosterCard(
                         )
                     }
                 }
+            }
+
+            if (!topStartBadge.isNullOrBlank()) {
+                Text(
+                    text = topStartBadge,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(NuvioTokens.Space.s6)
+                        .clip(RoundedCornerShape(NuvioTokens.Space.s6))
+                        .background(Color.Black.copy(alpha = 0.62f))
+                        .padding(horizontal = NuvioTokens.Space.s6, vertical = NuvioTokens.Space.s2),
+                )
             }
 
             NuvioPosterWatchedOverlay(isWatched = isWatched)

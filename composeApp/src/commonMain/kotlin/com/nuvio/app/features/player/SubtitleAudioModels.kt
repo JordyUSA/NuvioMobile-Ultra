@@ -59,11 +59,32 @@ const val SUBTITLE_DELAY_MIN_MS = -600_000
 const val SUBTITLE_DELAY_MAX_MS = 600_000
 const val SUBTITLE_DELAY_STEP_MS = 100
 
+/**
+ * How subtitle glyphs are separated from the picture behind them.
+ *
+ * This replaces a plain outline on/off switch. Outline is the safe default but it is not always
+ * the right one — over bright, busy footage a drop shadow reads better, and on a dark grade a
+ * raised edge is cleaner than a hard black ring.
+ */
+enum class SubtitleEdgeStyle {
+    None,
+    Outline,
+    DropShadow,
+    OutlineAndShadow,
+    Raised,
+    Depressed,
+    ;
+
+    /** Whether this style paints anything using the outline colour. */
+    val drawsEdge: Boolean
+        get() = this != None
+}
+
 data class SubtitleStyleState(
     val textColor: Color = Color.White,
     val backgroundColor: Color = Color.Transparent,
     val outlineColor: Color = Color.Black,
-    val outlineEnabled: Boolean = true,
+    val edgeStyle: SubtitleEdgeStyle = SubtitleEdgeStyle.Outline,
     val outlineWidth: Int = 2,
     val bold: Boolean = false,
     val fontSizeSp: Int = 18,
@@ -73,9 +94,30 @@ data class SubtitleStyleState(
     val bottomOffset: Int = 20,
     val useForcedSubtitles: Boolean = false,
     val showOnlyPreferredLanguages: Boolean = false,
+    /** Applied on top of [textColor] and [backgroundColor] rather than baked into the swatches. */
+    val textOpacity: Float = 1f,
+    val backgroundOpacity: Float = 1f,
 ) {
+    val outlineEnabled: Boolean
+        get() = edgeStyle.drawsEdge
+
+    /** [textColor] with [textOpacity] applied, which is what renderers should actually use. */
+    val effectiveTextColor: Color
+        get() = textColor.copy(alpha = (textColor.alpha * textOpacity).coerceIn(0f, 1f))
+
+    /** [backgroundColor] with [backgroundOpacity] applied. */
+    val effectiveBackgroundColor: Color
+        get() = backgroundColor.copy(
+            alpha = (backgroundColor.alpha * backgroundOpacity).coerceIn(0f, 1f),
+        )
+
     companion object {
         val DEFAULT = SubtitleStyleState()
+
+        /** Smallest and largest selectable subtitle size, in sp. */
+        const val MIN_FONT_SIZE_SP = 4
+        const val MAX_FONT_SIZE_SP = 40
+        const val FONT_SIZE_STEP_SP = 2
     }
 }
 

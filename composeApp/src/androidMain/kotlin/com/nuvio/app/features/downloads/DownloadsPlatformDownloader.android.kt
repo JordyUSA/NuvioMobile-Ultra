@@ -53,7 +53,7 @@ internal actual object DownloadsPlatformDownloader {
         request: DownloadPlatformRequest,
         onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
         onSuccess: (localFileUri: String, totalBytes: Long?) -> Unit,
-        onFailure: (message: String) -> Unit,
+        onFailure: (reason: DownloadFailureReason, detail: String) -> Unit,
     ): DownloadsTaskHandle {
         val job = SupervisorJob()
         val scope = CoroutineScope(job + Dispatchers.IO)
@@ -62,7 +62,10 @@ internal actual object DownloadsPlatformDownloader {
         scope.launch {
             val context = appContext
             if (context == null) {
-                onFailure(runBlocking { getString(Res.string.downloads_error_not_initialized) })
+                onFailure(
+                    DownloadFailureReason.Unknown,
+                    runBlocking { getString(Res.string.downloads_error_not_initialized) },
+                )
                 return@launch
             }
 
@@ -99,7 +102,10 @@ internal actual object DownloadsPlatformDownloader {
                 )
             } catch (error: Throwable) {
                 if (error is CancellationException) return@launch
-                onFailure(error.message ?: runBlocking { getString(Res.string.download_failed) })
+                onFailure(
+                    error.toDownloadFailureReason(),
+                    error.message ?: runBlocking { getString(Res.string.download_failed) },
+                )
             }
         }
 
@@ -425,6 +431,35 @@ private class HttpDownloadException(
 ) : IOException(
     runBlocking { getString(Res.string.downloads_error_http_failed, code) },
 )
+
+/**
+ * Classifies a download failure into something worth showing the user.
+ *
+ * Ordering matters: the storage check runs before the generic IOException catch-all, because a
+ * full disk arrives as a plain IOException whose message is the only thing distinguishing it,
+ * and "not enough storage" is the one failure here the user can actually fix.
+ */
+private fun Throwable.toDownloadFailureReason(): DownloadFailureReason = when {
+    this is HttpDownloadException -> downloadFailureReasonForHttpStatus(code)
+    this is java.net.SocketTimeoutException -> DownloadFailureReason.Timeout
+    this is java.net.UnknownHostException -> DownloadFailureReason.NoConnection
+    this is java.net.ConnectException -> DownloadFailureReason.NoConnection
+    this is javax.net.ssl.SSLException -> DownloadFailureReason.NoConnection
+    isOutOfStorageError() -> DownloadFailureReason.OutOfStorage
+    this is java.io.FileNotFoundException -> DownloadFailureReason.FileWriteFailed
+    this is EOFException -> DownloadFailureReason.Timeout
+    this is java.net.SocketException -> DownloadFailureReason.Timeout
+    this is IOException -> DownloadFailureReason.Unknown
+    else -> DownloadFailureReason.Unknown
+}
+
+private fun Throwable.isOutOfStorageError(): Boolean {
+    val text = message.orEmpty().lowercase()
+    return text.contains("enospc") ||
+        text.contains("no space left") ||
+        text.contains("not enough space") ||
+        text.contains("disk full")
+}
 
 private fun Throwable.isRetryableDownloadError(): Boolean = when (this) {
     is CancellationException -> false

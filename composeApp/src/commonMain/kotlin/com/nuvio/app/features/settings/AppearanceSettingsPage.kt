@@ -78,6 +78,8 @@ import nuvio.composeapp.generated.resources.compose_settings_page_poster_customi
 import nuvio.composeapp.generated.resources.compose_settings_page_streams
 import nuvio.composeapp.generated.resources.settings_appearance_app_language
 import nuvio.composeapp.generated.resources.settings_appearance_app_language_sheet_title
+import nuvio.composeapp.generated.resources.settings_appearance_auto_rotate
+import nuvio.composeapp.generated.resources.settings_appearance_auto_rotate_description
 import nuvio.composeapp.generated.resources.settings_appearance_amoled_black
 import nuvio.composeapp.generated.resources.settings_appearance_amoled_description
 import nuvio.composeapp.generated.resources.settings_appearance_continue_watching_description
@@ -111,6 +113,7 @@ internal fun LazyListScope.appearanceSettingsContent(
     selectedTheme: AppTheme,
     onThemeSelected: (AppTheme) -> Unit,
     amoledEnabled: Boolean,
+    autoRotateEnabled: Boolean,
     onAmoledToggle: (Boolean) -> Unit,
     liquidGlassNativeTabBarSupported: Boolean,
     liquidGlassNativeTabBarEnabled: Boolean,
@@ -158,6 +161,8 @@ internal fun LazyListScope.appearanceSettingsContent(
                             AppTheme.EMERALD,
                             AppTheme.AMBER,
                             AppTheme.ROSE,
+                            AppTheme.SLATE,
+                            AppTheme.MOCHA,
                         ),
                         selectedTheme = selectedTheme,
                         customFirst = customFirst,
@@ -177,6 +182,9 @@ internal fun LazyListScope.appearanceSettingsContent(
                             AppTheme.BLOSSOM,
                             AppTheme.LAGOON,
                             AppTheme.SUNSET,
+                            AppTheme.COSMOS,
+                            AppTheme.CITRUS,
+                            AppTheme.MIDNIGHT,
                             AppTheme.CUSTOM,
                         ),
                         selectedTheme = selectedTheme,
@@ -218,6 +226,14 @@ internal fun LazyListScope.appearanceSettingsContent(
                     checked = amoledEnabled,
                     isTablet = isTablet,
                     onCheckedChange = onAmoledToggle,
+                )
+                SettingsGroupDivider(isTablet = isTablet)
+                SettingsSwitchRow(
+                    title = stringResource(Res.string.settings_appearance_auto_rotate),
+                    description = stringResource(Res.string.settings_appearance_auto_rotate_description),
+                    checked = autoRotateEnabled,
+                    isTablet = isTablet,
+                    onCheckedChange = ThemeSettingsRepository::setAutoRotateEnabled,
                 )
                 if (liquidGlassNativeTabBarSupported) {
                     SettingsGroupDivider(isTablet = isTablet)

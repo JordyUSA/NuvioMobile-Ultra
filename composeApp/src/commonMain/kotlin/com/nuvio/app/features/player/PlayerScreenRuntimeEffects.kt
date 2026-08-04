@@ -345,6 +345,11 @@ internal fun PlayerScreenRuntime.BindPlayerRuntimeEffects() {
             playerController?.clearNowPlayingInfo()
             P2pStreamingEngine.shutdown()
             PlayerStreamsRepository.clearAll()
+            // The stream cache exists to survive app switching during playback, not to outlive
+            // the player. Clearing here is what keeps it from accumulating title after title.
+            // Deliberately not scoped to the setting: turning caching off must not strand
+            // whatever the previous session already wrote.
+            VideoStreamCacheCleaner.clearAsync()
         }
     }
 }

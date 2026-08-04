@@ -143,6 +143,16 @@ private fun NuvioEnhancedSettingsPageContent(
     val noEmailAppMessage = stringResource(Res.string.nuvio_enhanced_toast_no_email_app)
     val homeHeroVideoPreviewSupported = AppFeaturePolicy.heroTrailerPlaybackSupported &&
         AppFeaturePolicy.trailerPlaybackMode == TrailerPlaybackMode.IN_APP
+    // These rows have several independent reasons to be off. Naming the one that actually
+    // applies matters most for the build-flavour case: no amount of toggling other settings
+    // will enable in-hero previews in a distribution that plays trailers externally, and
+    // without saying so the row just looks broken.
+    val trailerExternalReason = stringResource(Res.string.nuvio_enhanced_unavailable_trailer_external)
+    val showcaseHeroOffReason = stringResource(Res.string.nuvio_enhanced_unavailable_showcase_hero)
+    val videoPreviewOffReason = stringResource(Res.string.nuvio_enhanced_unavailable_video_preview)
+    val homeFeaturesOffReason = stringResource(Res.string.nuvio_enhanced_unavailable_home_features)
+    val conciergeOffReason = stringResource(Res.string.nuvio_enhanced_unavailable_concierge)
+    val quietHomeOnReason = stringResource(Res.string.nuvio_enhanced_unavailable_quiet_home)
     val detailHeroTrailerPlaybackSupported = AppFeaturePolicy.heroTrailerPlaybackSupported &&
         AppFeaturePolicy.trailerPlaybackMode == TrailerPlaybackMode.IN_APP
 
@@ -200,6 +210,7 @@ private fun NuvioEnhancedSettingsPageContent(
                     description = stringResource(Res.string.nuvio_enhanced_concierge_desc),
                     checked = settings.nuvioConciergeEnabled,
                     enabled = settings.enhancedHomeFeaturesEnabled,
+                    disabledReason = homeFeaturesOffReason,
                     isTablet = isTablet,
                     highlighted = isNew(NuvioEnhancedFeature.HomeExperienceControls),
                     onCheckedChange = {
@@ -213,6 +224,11 @@ private fun NuvioEnhancedSettingsPageContent(
                     description = stringResource(Res.string.nuvio_enhanced_smart_resume_desc),
                     checked = settings.smartResumeEnabled,
                     enabled = settings.enhancedHomeFeaturesEnabled && settings.nuvioConciergeEnabled,
+                    disabledReason = if (settings.enhancedHomeFeaturesEnabled) {
+                        conciergeOffReason
+                    } else {
+                        homeFeaturesOffReason
+                    },
                     isTablet = isTablet,
                     highlighted = isNew(NuvioEnhancedFeature.SmartResume2),
                     onCheckedChange = {
@@ -226,6 +242,11 @@ private fun NuvioEnhancedSettingsPageContent(
                     description = stringResource(Res.string.nuvio_enhanced_release_signals_desc),
                     checked = settings.releaseRadarHomeSignalsEnabled,
                     enabled = settings.enhancedHomeFeaturesEnabled && settings.nuvioConciergeEnabled,
+                    disabledReason = if (settings.enhancedHomeFeaturesEnabled) {
+                        conciergeOffReason
+                    } else {
+                        homeFeaturesOffReason
+                    },
                     isTablet = isTablet,
                     highlighted = isNew(NuvioEnhancedFeature.HomeExperienceControls),
                     onCheckedChange = {
@@ -239,6 +260,11 @@ private fun NuvioEnhancedSettingsPageContent(
                     description = stringResource(Res.string.nuvio_enhanced_profile_stats_desc),
                     checked = settings.profileStatsEnabled,
                     enabled = settings.enhancedHomeFeaturesEnabled && settings.nuvioConciergeEnabled,
+                    disabledReason = if (settings.enhancedHomeFeaturesEnabled) {
+                        conciergeOffReason
+                    } else {
+                        homeFeaturesOffReason
+                    },
                     isTablet = isTablet,
                     highlighted = isNew(NuvioEnhancedFeature.HomeExperienceControls),
                     onCheckedChange = {
@@ -259,6 +285,11 @@ private fun NuvioEnhancedSettingsPageContent(
                     description = stringResource(Res.string.nuvio_enhanced_smart_shelf_desc),
                     checked = settings.smartShelvesEnabled,
                     enabled = settings.enhancedHomeFeaturesEnabled && !settings.quietHomeModeEnabled,
+                    disabledReason = if (settings.enhancedHomeFeaturesEnabled) {
+                        quietHomeOnReason
+                    } else {
+                        homeFeaturesOffReason
+                    },
                     isTablet = isTablet,
                     highlighted = isNew(NuvioEnhancedFeature.SmartShelfComposer),
                     onCheckedChange = {
@@ -272,6 +303,7 @@ private fun NuvioEnhancedSettingsPageContent(
                     description = stringResource(Res.string.nuvio_enhanced_release_digest_desc),
                     checked = settings.releaseRadarDigestEnabled,
                     enabled = settings.enhancedHomeFeaturesEnabled,
+                    disabledReason = homeFeaturesOffReason,
                     isTablet = isTablet,
                     highlighted = isNew(NuvioEnhancedFeature.ReleaseRadarDigest),
                     onCheckedChange = {
@@ -285,6 +317,7 @@ private fun NuvioEnhancedSettingsPageContent(
                     description = stringResource(Res.string.nuvio_enhanced_quiet_home_desc),
                     checked = settings.quietHomeModeEnabled,
                     enabled = settings.enhancedHomeFeaturesEnabled,
+                    disabledReason = homeFeaturesOffReason,
                     isTablet = isTablet,
                     highlighted = isNew(NuvioEnhancedFeature.QuietHomeMode),
                     onCheckedChange = {
@@ -298,6 +331,7 @@ private fun NuvioEnhancedSettingsPageContent(
                     description = stringResource(Res.string.nuvio_enhanced_library_health_desc),
                     checked = settings.libraryHealthEnabled,
                     enabled = settings.enhancedHomeFeaturesEnabled,
+                    disabledReason = homeFeaturesOffReason,
                     isTablet = isTablet,
                     highlighted = isNew(NuvioEnhancedFeature.LibraryHealth),
                     onCheckedChange = {
@@ -406,6 +440,11 @@ private fun NuvioEnhancedSettingsPageContent(
                         checked = playerSettings.androidMemorySafeBufferEnabled,
                         enabled = !playerSettings.externalPlayerEnabled &&
                             playerSettings.androidPlaybackEngine != AndroidPlaybackEngine.Libmpv,
+                        disabledReason = if (playerSettings.externalPlayerEnabled) {
+                            stringResource(Res.string.settings_playback_unavailable_external_player)
+                        } else {
+                            stringResource(Res.string.settings_playback_unavailable_exoplayer_engine)
+                        },
                         isTablet = isTablet,
                         highlighted = isNew(NuvioEnhancedFeature.PlayerStatusOverlay),
                         onCheckedChange = PlayerSettingsRepository::setAndroidMemorySafeBufferEnabled,
@@ -508,6 +547,10 @@ private fun NuvioEnhancedSettingsPageContent(
                     description = stringResource(Res.string.nuvio_enhanced_showcase_video_preview_desc),
                     checked = settings.streamingShowcaseVideoPreviewEnabled,
                     enabled = settings.streamingShowcaseHeroEnabled && homeHeroVideoPreviewSupported,
+                    disabledReason = when {
+                        !homeHeroVideoPreviewSupported -> trailerExternalReason
+                        else -> showcaseHeroOffReason
+                    },
                     isTablet = isTablet,
                     highlighted = isNew(NuvioEnhancedFeature.HeroExperienceControls),
                     onCheckedChange = {
@@ -523,6 +566,11 @@ private fun NuvioEnhancedSettingsPageContent(
                     enabled = settings.streamingShowcaseHeroEnabled &&
                         settings.streamingShowcaseVideoPreviewEnabled &&
                         homeHeroVideoPreviewSupported,
+                    disabledReason = when {
+                        !homeHeroVideoPreviewSupported -> trailerExternalReason
+                        !settings.streamingShowcaseHeroEnabled -> showcaseHeroOffReason
+                        else -> videoPreviewOffReason
+                    },
                     isTablet = isTablet,
                     highlighted = isNew(NuvioEnhancedFeature.HeroExperienceControls),
                     onCheckedChange = {

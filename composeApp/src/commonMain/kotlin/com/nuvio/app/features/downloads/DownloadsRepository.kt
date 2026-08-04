@@ -3,6 +3,10 @@ package com.nuvio.app.features.downloads
 import com.nuvio.app.features.details.MetaDetails
 import com.nuvio.app.features.details.MetaDetailsRepository
 import com.nuvio.app.features.streams.StreamItem
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +24,8 @@ object DownloadsRepository {
     val uiState: StateFlow<DownloadsUiState> = _uiState.asStateFlow()
 
     private val activeHandles = mutableMapOf<String, DownloadsTaskHandle>()
+    private val probeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val probesInFlight = mutableSetOf<String>()
     private var hasLoaded = false
     private var nextDownloadOrdinal = 0L
 
@@ -232,6 +238,8 @@ object DownloadsRepository {
             current.copy(
                 status = DownloadStatus.Paused,
                 downloadSpeedBytesPerSecond = 0L,
+                // Drop the sample so resuming does not measure a speed across the pause.
+                statsUpdatedAtEpochMs = 0L,
                 updatedAtEpochMs = DownloadsClock.nowEpochMs(),
                 errorMessage = null,
             )
@@ -254,8 +262,11 @@ object DownloadsRepository {
         val reset = item.copy(
             status = DownloadStatus.Downloading,
             errorMessage = null,
+            failureReason = null,
+            errorDetail = null,
             localFileUri = null,
             downloadSpeedBytesPerSecond = 0L,
+            statsUpdatedAtEpochMs = 0L,
             updatedAtEpochMs = DownloadsClock.nowEpochMs(),
         )
 
@@ -412,6 +423,7 @@ object DownloadsRepository {
                     item.copy(
                         status = DownloadStatus.Paused,
                         downloadSpeedBytesPerSecond = 0L,
+                        statsUpdatedAtEpochMs = 0L,
                         errorMessage = null,
                     )
                 } else {
@@ -432,6 +444,12 @@ object DownloadsRepository {
         }
     }
 
+    /**
+     * How often the speed, size and ETA text is recomputed. The underlying progress emissions
+     * stay at their platform cadence so the bar keeps animating smoothly.
+     */
+    private const val DownloadStatsSampleIntervalMs = 1_000L
+
     private fun startDownload(item: DownloadItem) {
         val request = DownloadPlatformRequest(
             sourceUrl = item.sourceUrl,
@@ -448,30 +466,55 @@ object DownloadsRepository {
                     } else {
                         val now = DownloadsClock.nowEpochMs()
                         val nextDownloadedBytes = downloadedBytes.coerceAtLeast(0L)
-                        val byteDelta = (nextDownloadedBytes - current.downloadedBytes).coerceAtLeast(0L)
-                        val elapsedMs = (now - current.updatedAtEpochMs).coerceAtLeast(0L)
-                        val instantSpeed = if (byteDelta > 0L && elapsedMs > 0L) {
-                            (byteDelta * 1_000L) / elapsedMs
-                        } else {
-                            null
-                        }
-                        val smoothedSpeed = when {
-                            instantSpeed == null -> current.downloadSpeedBytesPerSecond
-                            current.downloadSpeedBytesPerSecond > 0L ->
-                                (
-                                    current.downloadSpeedBytesPerSecond.toDouble() * 0.65 +
-                                        instantSpeed.toDouble() * 0.35
-                                    ).toLong()
-                            else -> instantSpeed
-                        }.coerceAtLeast(0L)
+                        val sampleElapsedMs = (now - current.statsUpdatedAtEpochMs).coerceAtLeast(0L)
 
-                        current.copy(
+                        // The bar tracks downloadedBytes on every emission; speed, size and ETA
+                        // are recomputed only once a second, because text that changes twice a
+                        // second is text nobody can read.
+                        val takeStatsSample = current.statsUpdatedAtEpochMs <= 0L ||
+                            sampleElapsedMs >= DownloadStatsSampleIntervalMs
+
+                        val progressed = current.copy(
                             downloadedBytes = nextDownloadedBytes,
                             totalBytes = totalBytes?.takeIf { it > 0L },
-                            downloadSpeedBytesPerSecond = smoothedSpeed,
                             updatedAtEpochMs = now,
                             errorMessage = null,
+                            failureReason = null,
+                            errorDetail = null,
                         )
+
+                        if (!takeStatsSample) {
+                            progressed
+                        } else if (current.statsUpdatedAtEpochMs <= 0L) {
+                            // First emission of this run: establish the baseline only. Measuring
+                            // against a zero timestamp would report a speed of roughly nothing.
+                            progressed.copy(
+                                statsBytes = nextDownloadedBytes,
+                                statsUpdatedAtEpochMs = now,
+                            )
+                        } else {
+                            val byteDelta = (nextDownloadedBytes - current.statsBytes).coerceAtLeast(0L)
+                            val instantSpeed = if (byteDelta > 0L && sampleElapsedMs > 0L) {
+                                (byteDelta * 1_000L) / sampleElapsedMs
+                            } else {
+                                null
+                            }
+                            val smoothedSpeed = when {
+                                instantSpeed == null -> current.downloadSpeedBytesPerSecond
+                                current.downloadSpeedBytesPerSecond > 0L ->
+                                    (
+                                        current.downloadSpeedBytesPerSecond.toDouble() * 0.65 +
+                                            instantSpeed.toDouble() * 0.35
+                                        ).toLong()
+                                else -> instantSpeed
+                            }.coerceAtLeast(0L)
+
+                            progressed.copy(
+                                downloadSpeedBytesPerSecond = smoothedSpeed,
+                                statsBytes = nextDownloadedBytes,
+                                statsUpdatedAtEpochMs = now,
+                            )
+                        }
                     }
                 }
             },
@@ -494,11 +537,14 @@ object DownloadsRepository {
                         totalBytes = totalBytes?.takeIf { it > 0L } ?: current.totalBytes,
                         downloadSpeedBytesPerSecond = 0L,
                         errorMessage = null,
+                        failureReason = null,
+                        errorDetail = null,
                         updatedAtEpochMs = DownloadsClock.nowEpochMs(),
                     )
                 }
+                probeMediaInfo(item.id)
             },
-            onFailure = { message ->
+            onFailure = { reason, detail ->
                 activeHandles.remove(item.id)
                 mutateItem(item.id) { current ->
                     if (current.status != DownloadStatus.Downloading) {
@@ -507,7 +553,9 @@ object DownloadsRepository {
                         current.copy(
                             status = DownloadStatus.Failed,
                             downloadSpeedBytesPerSecond = 0L,
-                            errorMessage = message.ifBlank { runBlocking { getString(Res.string.download_failed) } },
+                            errorMessage = reason.localizedText(),
+                            failureReason = reason,
+                            errorDetail = detail.takeIf { it.isNotBlank() },
                             updatedAtEpochMs = DownloadsClock.nowEpochMs(),
                         )
                     }
@@ -516,6 +564,33 @@ object DownloadsRepository {
         )
 
         activeHandles[item.id] = handle
+    }
+
+    /**
+     * Reads container, codec and track detail out of a finished download.
+     *
+     * Reads the local file with MediaInfoLib where the build carries it, and the Cast pipeline's
+     * prober otherwise — MediaExtractor on Android, FFprobe on iOS. Failure is expected and
+     * survivable: an exotic container simply leaves [DownloadItem.mediaInfo] null, and the
+     * resolution badge falls back to parsing the release name. Nothing about playback or the
+     * download itself depends on this succeeding.
+     */
+    fun probeMediaInfo(downloadId: String) {
+        val item = _uiState.value.items.firstOrNull { it.id == downloadId } ?: return
+        if (item.mediaInfo != null) return
+        val localFileUri = item.localFileUri?.takeIf { it.isNotBlank() } ?: return
+        if (!probesInFlight.add(downloadId)) return
+
+        probeScope.launch {
+            try {
+                val mediaInfo = probeDownloadMediaInfo(localFileUri) ?: return@launch
+                mutateItem(downloadId) { current ->
+                    current.copy(mediaInfo = mediaInfo)
+                }
+            } finally {
+                probesInFlight.remove(downloadId)
+            }
+        }
     }
 
     private fun mutateItem(downloadId: String, transform: (DownloadItem) -> DownloadItem) {

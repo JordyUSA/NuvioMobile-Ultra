@@ -87,15 +87,19 @@ fun NuvioScreen(
 ) {
     val tokens = MaterialTheme.nuvio
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    // Zero in portrait; in landscape this is what keeps content out from under a notch or
+    // Dynamic Island. Taken as a maximum so the design's own padding still wins where it is
+    // already larger than the cutout.
+    val (cutoutStart, cutoutEnd) = nuvioCutoutHorizontalPadding()
     LazyColumn(
         state = listState,
         modifier = modifier
             .fillMaxSize()
             .background(backgroundColor),
         contentPadding = PaddingValues(
-            start = horizontalPadding,
+            start = horizontalPadding.coerceAtLeast(cutoutStart),
             top = topPadding ?: tokens.spacing.screenTop + statusBarTop + nuvioPlatformExtraTopPadding,
-            end = horizontalPadding,
+            end = horizontalPadding.coerceAtLeast(cutoutEnd),
             bottom = nuvioSafeBottomPadding(tokens.spacing.screenBottom),
         ),
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.listGap),

@@ -46,6 +46,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.cache.CacheDataSink
+import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -178,6 +180,7 @@ actual fun PlatformPlayerSurface(
                 videoOutput = playerSettings.androidLibmpvVideoOutput,
                 hardwareDecodingEnabled = playerSettings.androidLibmpvHardwareDecodingEnabled && !isDirectMatroska,
                 yuv420pEnabled = playerSettings.androidLibmpvYuv420pEnabled,
+                streamCacheDirectory = resolveStreamCacheDirectory(playerSettings, sourceUrl),
                 onControllerReady = onControllerReady,
                 onSnapshot = onSnapshot,
                 onError = onError,
@@ -306,14 +309,21 @@ private fun ExoPlayerSurface(
         sanitizedSourceResponseHeaders,
         useYoutubeChunkedPlayback,
         externalSubtitles,
+        playerSettings.streamCacheEnabled,
+        playerSettings.streamCacheSizeMb,
     ) {
-        PlatformPlaybackDataSourceFactory.create(
+        val upstream = PlatformPlaybackDataSourceFactory.create(
             context = context,
             defaultRequestHeaders = sanitizedSourceHeaders,
             defaultResponseHeaders = sanitizedSourceResponseHeaders,
             useYoutubeChunkedPlayback = useYoutubeChunkedPlayback,
             useLongReadTimeout = isLoopbackPlaybackSource(sourceUrl),
             externalSubtitles = externalSubtitles,
+        )
+        upstream.withStreamCache(
+            enabled = playerSettings.streamCacheEnabled,
+            maxSizeBytes = playerSettings.streamCacheSizeMb.toLong() * 1024L * 1024L,
+            sourceUrl = sourceUrl,
         )
     }
 
@@ -900,6 +910,7 @@ private fun LibmpvPlayerSurface(
     videoOutput: AndroidLibmpvVideoOutput,
     hardwareDecodingEnabled: Boolean,
     yuv420pEnabled: Boolean,
+    streamCacheDirectory: String?,
     onControllerReady: (PlayerEngineController) -> Unit,
     onSnapshot: (PlayerPlaybackSnapshot) -> Unit,
     onError: (String?) -> Unit,
@@ -1063,6 +1074,7 @@ private fun LibmpvPlayerSurface(
                 videoOutput = videoOutput,
                 hardwareDecodingEnabled = hardwareDecodingEnabled,
                 yuv420pEnabled = yuv420pEnabled,
+                streamCacheDirectory = streamCacheDirectory,
             ).apply {
                 layoutParams = android.view.ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
                 keepScreenOn = false
@@ -1099,6 +1111,7 @@ private class NuvioLibmpvView(
     private val videoOutput: AndroidLibmpvVideoOutput,
     private val hardwareDecodingEnabled: Boolean,
     private val yuv420pEnabled: Boolean,
+    private val streamCacheDirectory: String?,
     attrs: AttributeSet? = null,
 ) : BaseMPVView(context, attrs) {
     private var currentSourceUrl: String? = null
@@ -1124,6 +1137,13 @@ private class NuvioLibmpvView(
         mpv.setOptionString("tls-ca-file", "${context.filesDir.path}/cacert.pem")
         mpv.setOptionString("demuxer-max-bytes", "${libmpvCacheBytes()}").logIfMpvError("demuxer-max-bytes")
         mpv.setOptionString("demuxer-max-back-bytes", "${libmpvCacheBytes()}").logIfMpvError("demuxer-max-back-bytes")
+        streamCacheDirectory?.let { cacheDirectory ->
+            // Spills the demuxer cache to disk so it survives the app being backgrounded,
+            // instead of being capped by the in-memory demuxer-max-bytes above.
+            mpv.setOptionString("cache", "yes").logIfMpvError("cache")
+            mpv.setOptionString("cache-on-disk", "yes").logIfMpvError("cache-on-disk")
+            mpv.setOptionString("cache-dir", cacheDirectory).logIfMpvError("cache-dir")
+        }
         mpv.setOptionString("vd-lavc-film-grain", "cpu")
         mpv.setPropertyBoolean("keep-open", true)
         mpv.setPropertyBoolean("input-default-bindings", true)
@@ -1292,7 +1312,11 @@ private class NuvioLibmpvView(
         )
         val durationMs = stableDurationMs(rawDurationMs, rawPositionMs)
         val positionMs = stablePositionMs(rawPositionMs, durationMs)
-        val cachePositionMs = positionMs + mpv.getPropertyDouble("demuxer-cache-time").toMillis()
+        // demuxer-cache-time is the ABSOLUTE timestamp of the last buffered data, not a
+        // duration ahead of the playhead, so it must not be added to the position — doing so
+        // roughly doubled the value and drove the seek bar's buffered band to full almost
+        // immediately.
+        val cachePositionMs = mpv.getPropertyDouble("demuxer-cache-time").toMillis()
         val isCacheBuffering = cacheBufferingState != null && cacheBufferingState in 0 until 100
         val isLoading = pausedForCache ||
             (!paused && !ended && (seeking || isCacheBuffering || (idle && durationMs <= 0L)))
@@ -1463,10 +1487,12 @@ private class NuvioLibmpvView(
 
             override fun applySubtitleStyle(style: SubtitleStyleState) {
                 mpv.setPropertyString("sub-ass-override", "no")
-                mpv.setPropertyString("sub-color", style.textColor.toMpvColor())
-                mpv.setPropertyString("sub-back-color", style.backgroundColor.toMpvColor())
+                mpv.setPropertyString("sub-color", style.effectiveTextColor.toMpvColor())
+                mpv.setPropertyString("sub-back-color", style.effectiveBackgroundColor.toMpvColor())
                 mpv.setPropertyString("sub-outline-color", style.outlineColor.toMpvColor())
                 mpv.setPropertyString("sub-border-color", style.outlineColor.toMpvColor())
+                mpv.setPropertyString("sub-shadow-color", style.outlineColor.toMpvColor())
+                mpv.setPropertyString("sub-shadow-offset", "${style.toMpvSubtitleShadowOffset()}")
                 mpv.setPropertyString("sub-border-style", style.toMpvSubtitleBorderStyle())
                 mpv.setPropertyString("sub-bold", if (style.bold) "yes" else "no")
                 style.customFontDirectory()?.let { mpv.setPropertyString("sub-fonts-dir", it) }
@@ -1570,22 +1596,36 @@ private fun SubtitleStyleState.toMpvSubtitleFontSize(): Int =
         MPV_SUBTITLE_FONT_SIZE_MAX,
     )
 
-private fun SubtitleStyleState.toMpvSubtitleOutlineSize(): Int =
-    if (!outlineEnabled) 0 else (outlineWidth * MPV_SUBTITLE_OUTLINE_SIZE_SCALE).toInt().coerceAtLeast(1)
+private fun SubtitleStyleState.toMpvSubtitleOutlineSize(): Int = when (edgeStyle) {
+    // A drop shadow is drawn by the shadow offset alone; leaving a border on top of it would
+    // give the user both effects when they picked one.
+    SubtitleEdgeStyle.None, SubtitleEdgeStyle.DropShadow -> 0
+    else -> (outlineWidth * MPV_SUBTITLE_OUTLINE_SIZE_SCALE).toInt().coerceAtLeast(1)
+}
+
+private fun SubtitleStyleState.toMpvSubtitleShadowOffset(): Int = when (edgeStyle) {
+    SubtitleEdgeStyle.DropShadow,
+    SubtitleEdgeStyle.OutlineAndShadow -> (outlineWidth * MPV_SUBTITLE_SHADOW_OFFSET_SCALE)
+        .toInt()
+        .coerceAtLeast(1)
+    // mpv has no raised/depressed edge. Both are approximated with a shadow, which is the
+    // closest thing it can draw, rather than being silently ignored.
+    SubtitleEdgeStyle.Raised, SubtitleEdgeStyle.Depressed -> 1
+    else -> 0
+}
 
 private fun SubtitleStyleState.toMpvSubtitleBorderStyle(): String =
-    if (outlineEnabled) {
-        "outline-and-shadow"
-    } else if (backgroundColor.alphaByte() > 0) {
+    if (edgeStyle == SubtitleEdgeStyle.None && effectiveBackgroundColor.alphaByte() > 0) {
         "opaque-box"
     } else {
         "outline-and-shadow"
     }
 
 private const val MPV_SUBTITLE_FONT_SIZE_SCALE = 55.0 / 18.0
-private const val MPV_SUBTITLE_FONT_SIZE_MIN = 36
+private const val MPV_SUBTITLE_FONT_SIZE_MIN = 12
 private const val MPV_SUBTITLE_FONT_SIZE_MAX = 122
 private const val MPV_SUBTITLE_OUTLINE_SIZE_SCALE = 1.5
+private const val MPV_SUBTITLE_SHADOW_OFFSET_SCALE = 1.5
 private const val LibmpvSurfaceResizeSettleDelayMs = 80L
 
 private fun buildAndroidLoadControl(memorySafeBufferEnabled: Boolean): DefaultLoadControl =
@@ -1796,16 +1836,30 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState) {
         setBottomPaddingFraction(bottomPaddingFraction)
         setStyle(
             CaptionStyleCompat(
-                style.textColor.toArgb(),
-                style.backgroundColor.toArgb(),
+                style.effectiveTextColor.toArgb(),
+                style.effectiveBackgroundColor.toArgb(),
                 android.graphics.Color.TRANSPARENT,
-                if (style.outlineEnabled) CaptionStyleCompat.EDGE_TYPE_OUTLINE else CaptionStyleCompat.EDGE_TYPE_NONE,
+                style.edgeStyle.toCaptionEdgeType(),
                 style.outlineColor.toArgb(),
                 style.toAndroidSubtitleTypeface(),
             )
         )
         setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, style.fontSizeSp.toFloat())
     }
+}
+
+/**
+ * CaptionStyleCompat has no combined outline-and-shadow edge, so that choice maps to a plain
+ * outline. Outline is the half a viewer actually reads by; silently dropping it in favour of
+ * the shadow would be the worse of the two compromises.
+ */
+private fun SubtitleEdgeStyle.toCaptionEdgeType(): Int = when (this) {
+    SubtitleEdgeStyle.None -> CaptionStyleCompat.EDGE_TYPE_NONE
+    SubtitleEdgeStyle.Outline,
+    SubtitleEdgeStyle.OutlineAndShadow -> CaptionStyleCompat.EDGE_TYPE_OUTLINE
+    SubtitleEdgeStyle.DropShadow -> CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW
+    SubtitleEdgeStyle.Raised -> CaptionStyleCompat.EDGE_TYPE_RAISED
+    SubtitleEdgeStyle.Depressed -> CaptionStyleCompat.EDGE_TYPE_DEPRESSED
 }
 
 private fun SubtitleStyleState.toAndroidSubtitleTypeface(): Typeface {
@@ -2136,6 +2190,55 @@ private fun diagnosticPlaybackSource(value: String): String = runCatching {
     val isLoopback = host == "127.0.0.1" || host == "localhost" || host == "::1"
     "scheme=${uri.scheme ?: "none"},host=${host.ifBlank { "none" }},port=${uri.port},loopback=$isLoopback"
 }.getOrDefault("unparseable")
+
+/**
+ * Wraps a data source chain so ExoPlayer reads and writes through the temporary stream cache.
+ *
+ * Skipped for loopback URLs: those are served by the in-process torrent/DLNA server off local
+ * disk already, so caching them would write a second copy of bytes that are not going anywhere.
+ *
+ * Writes go through [CacheDataSink] with a per-fragment cap so one long movie cannot produce a
+ * single file larger than the evictor can ever reclaim, and FLAG_IGNORE_CACHE_ON_ERROR keeps a
+ * failing cache from taking playback down with it — a cache fault should cost a re-buffer, not
+ * the video.
+ */
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun DataSource.Factory.withStreamCache(
+    enabled: Boolean,
+    maxSizeBytes: Long,
+    sourceUrl: String,
+): DataSource.Factory {
+    if (!enabled || isLoopbackPlaybackSource(sourceUrl)) return this
+    val cache = VideoStreamCache.acquire(maxSizeBytes) ?: return this
+
+    return CacheDataSource.Factory()
+        .setCache(cache)
+        .setUpstreamDataSourceFactory(this)
+        .setCacheWriteDataSinkFactory(
+            CacheDataSink.Factory()
+                .setCache(cache)
+                .setFragmentSize(StreamCacheFragmentSizeBytes),
+        )
+        .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+}
+
+private const val StreamCacheFragmentSizeBytes = 8L * 1024L * 1024L
+
+/**
+ * The directory mpv should spill its cache into, or null when caching is off for this source.
+ *
+ * mpv has no size ceiling for `cache-on-disk`, so the user's chosen limit cannot be enforced by
+ * mpv itself. It is enforced instead by the sweep on player exit, app start and app background,
+ * which is also what the setting promises: a temporary cache, not a growing one.
+ */
+private fun resolveStreamCacheDirectory(
+    playerSettings: PlayerSettingsUiState,
+    sourceUrl: String,
+): String? {
+    if (!playerSettings.streamCacheEnabled) return null
+    if (isLoopbackPlaybackSource(sourceUrl)) return null
+    return VideoStreamCache.directoryPath().takeIf { it.isNotBlank() }
+}
 
 private fun isLoopbackPlaybackSource(value: String): Boolean = runCatching {
     when (Uri.parse(value).host.orEmpty().lowercase()) {

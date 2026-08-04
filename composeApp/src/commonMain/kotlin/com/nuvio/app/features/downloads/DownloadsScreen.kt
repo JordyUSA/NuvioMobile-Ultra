@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -61,7 +62,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.nuvio.app.core.i18n.localizedByteUnit
+import com.nuvio.app.core.i18n.localizedByteSize
 import com.nuvio.app.core.ui.NuvioModalBottomSheet
 import com.nuvio.app.core.ui.NuvioScreen
 import com.nuvio.app.core.ui.NuvioScreenHeader
@@ -122,6 +123,7 @@ fun DownloadsScreen(
     var actionSheetEntry by remember { mutableStateOf<DownloadsListEntry?>(null) }
     var presetPickerJobId by remember { mutableStateOf<String?>(null) }
     var errorDialogEntry by remember { mutableStateOf<DownloadsListEntry?>(null) }
+    var mediaInfoItem by remember { mutableStateOf<DownloadItem?>(null) }
     var pendingBulkDelete by remember { mutableStateOf<List<DownloadsListEntry>?>(null) }
 
     fun exitSelection() {
@@ -341,6 +343,20 @@ fun DownloadsScreen(
                 actionSheetEntry = null
                 errorDialogEntry = it
             },
+            onShowMediaInfo = {
+                actionSheetEntry = null
+                mediaInfoItem = it
+            },
+        )
+    }
+
+    mediaInfoItem?.let { item ->
+        // Re-read from the repository so a probe finishing while the sheet is open fills it in,
+        // rather than freezing whatever was known at the moment of the tap.
+        val liveItem = uiState.items.firstOrNull { it.id == item.id } ?: item
+        DownloadMediaInfoSheet(
+            item = liveItem,
+            onDismiss = { mediaInfoItem = null },
         )
     }
 
@@ -355,10 +371,15 @@ fun DownloadsScreen(
     }
 
     errorDialogEntry?.let { entry ->
+        // The classified reason is what the user can act on; the raw platform text is kept
+        // underneath it for anyone actually diagnosing the failure.
         val message = when (entry) {
-            is DownloadsListEntry.Download -> entry.item.errorMessage
-            is DownloadsListEntry.Conversion -> entry.job.errorMessage
-        }.orEmpty().ifBlank { stringResource(Res.string.downloads_status_failed) }
+            is DownloadsListEntry.Download -> listOfNotNull(
+                entry.item.failureText?.takeIf { it.isNotBlank() },
+                entry.item.errorDetail?.takeIf { it.isNotBlank() && it != entry.item.failureText },
+            ).joinToString("\n\n")
+            is DownloadsListEntry.Conversion -> entry.job.errorMessage.orEmpty()
+        }.ifBlank { stringResource(Res.string.downloads_status_failed) }
 
         NuvioStatusModal(
             title = stringResource(Res.string.downloads_error_dialog_title),
@@ -892,6 +913,15 @@ private fun UnifiedDownloadRow(
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         StatusPill(text = downloadStatusLabel(item), tone = downloadStatusTone(item))
+                        item.resolutionBadge()?.let { badge ->
+                            Text(
+                                text = badge,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = tokens.colors.accent,
+                                maxLines = 1,
+                            )
+                        }
                         formatBadge(item, probe)?.let { badge ->
                             Text(
                                 text = badge,
@@ -926,6 +956,7 @@ private fun UnifiedDownloadRow(
                     }
                 }
             }
+
 
             if (item.status == DownloadStatus.Downloading) {
                 if (item.totalBytes != null && item.totalBytes > 0L) {
@@ -1054,6 +1085,7 @@ private fun EntryActionSheet(
     onShare: (DownloadsListEntry) -> Unit,
     onChangePreset: (ConversionJob) -> Unit,
     onShowError: (DownloadsListEntry) -> Unit,
+    onShowMediaInfo: (DownloadItem) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
@@ -1095,6 +1127,9 @@ private fun EntryActionSheet(
                             }
                             ActionRow(Icons.Rounded.Tune, stringResource(Res.string.converter_action_convert)) {
                                 dismissThen { onConvert(item) }
+                            }
+                            ActionRow(Icons.Rounded.Info, stringResource(Res.string.downloads_media_info)) {
+                                dismissThen { onShowMediaInfo(item) }
                             }
                         }
                     }
@@ -1284,16 +1319,4 @@ private fun formatBadge(item: DownloadItem, probe: com.nuvio.app.features.cast.m
     return probe?.originalFormatLabel(item.totalBytes)
 }
 
-private fun formatBytes(bytes: Long): String {
-    if (bytes <= 0L) return "0 ${localizedByteUnit("B")}"
-    val kib = 1024.0
-    val mib = kib * 1024.0
-    val gib = mib * 1024.0
-    val value = bytes.toDouble()
-    return when {
-        value >= gib -> "${((value / gib) * 10.0).toInt() / 10.0} ${localizedByteUnit("GB")}"
-        value >= mib -> "${((value / mib) * 10.0).toInt() / 10.0} ${localizedByteUnit("MB")}"
-        value >= kib -> "${((value / kib) * 10.0).toInt() / 10.0} ${localizedByteUnit("KB")}"
-        else -> "$bytes ${localizedByteUnit("B")}"
-    }
-}
+private fun formatBytes(bytes: Long): String = localizedByteSize(bytes)

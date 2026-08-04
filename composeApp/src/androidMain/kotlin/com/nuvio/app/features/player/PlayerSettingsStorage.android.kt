@@ -40,6 +40,9 @@ actual object PlayerSettingsStorage {
     private const val subtitleBackgroundColorKey = "subtitle_background_color"
     private const val subtitleOutlineColorKey = "subtitle_outline_color"
     private const val subtitleOutlineEnabledKey = "subtitle_outline_enabled"
+    private const val subtitleEdgeStyleKey = "subtitle_edge_style"
+    private const val subtitleTextOpacityKey = "subtitle_text_opacity"
+    private const val subtitleBackgroundOpacityKey = "subtitle_background_opacity"
     private const val subtitleOutlineWidthKey = "subtitle_outline_width"
     private const val subtitleBoldKey = "subtitle_bold"
     private const val subtitleFontSizeSpKey = "subtitle_font_size_sp"
@@ -57,6 +60,8 @@ actual object PlayerSettingsStorage {
     private const val androidLibmpvHardwareDecodingEnabledKey = "android_libmpv_hardware_decoding_enabled"
     private const val androidLibmpvYuv420pEnabledKey = "android_libmpv_yuv420p_enabled"
     private const val androidMemorySafeBufferEnabledKey = "android_memory_safe_buffer_enabled"
+    private const val streamCacheEnabledKey = "stream_cache_enabled"
+    private const val streamCacheSizeMbKey = "stream_cache_size_mb"
     private const val decoderPriorityKey = "decoder_priority"
     private const val mapDV7ToHevcKey = "map_dv7_to_hevc"
     private const val tunnelingEnabledKey = "tunneling_enabled"
@@ -115,6 +120,9 @@ actual object PlayerSettingsStorage {
         subtitleBackgroundColorKey,
         subtitleOutlineColorKey,
         subtitleOutlineEnabledKey,
+        subtitleEdgeStyleKey,
+        subtitleTextOpacityKey,
+        subtitleBackgroundOpacityKey,
         subtitleOutlineWidthKey,
         subtitleBoldKey,
         subtitleFontSizeSpKey,
@@ -132,6 +140,8 @@ actual object PlayerSettingsStorage {
         androidLibmpvHardwareDecodingEnabledKey,
         androidLibmpvYuv420pEnabledKey,
         androidMemorySafeBufferEnabledKey,
+        streamCacheEnabledKey,
+        streamCacheSizeMbKey,
         decoderPriorityKey,
         mapDV7ToHevcKey,
         tunnelingEnabledKey,
@@ -490,6 +500,50 @@ actual object PlayerSettingsStorage {
             ?.apply()
     }
 
+    actual fun loadSubtitleEdgeStyle(): String? =
+        preferences?.getString(ProfileScopedKey.of(subtitleEdgeStyleKey), null)
+
+    actual fun saveSubtitleEdgeStyle(edgeStyle: String) {
+        preferences
+            ?.edit()
+            ?.putString(ProfileScopedKey.of(subtitleEdgeStyleKey), edgeStyle)
+            ?.apply()
+    }
+
+    actual fun loadSubtitleTextOpacity(): Float? =
+        preferences?.let { sharedPreferences ->
+            val key = ProfileScopedKey.of(subtitleTextOpacityKey)
+            if (sharedPreferences.contains(key)) {
+                sharedPreferences.getFloat(key, 1f).coerceIn(0f, 1f)
+            } else {
+                null
+            }
+        }
+
+    actual fun saveSubtitleTextOpacity(opacity: Float) {
+        preferences
+            ?.edit()
+            ?.putFloat(ProfileScopedKey.of(subtitleTextOpacityKey), opacity.coerceIn(0f, 1f))
+            ?.apply()
+    }
+
+    actual fun loadSubtitleBackgroundOpacity(): Float? =
+        preferences?.let { sharedPreferences ->
+            val key = ProfileScopedKey.of(subtitleBackgroundOpacityKey)
+            if (sharedPreferences.contains(key)) {
+                sharedPreferences.getFloat(key, 1f).coerceIn(0f, 1f)
+            } else {
+                null
+            }
+        }
+
+    actual fun saveSubtitleBackgroundOpacity(opacity: Float) {
+        preferences
+            ?.edit()
+            ?.putFloat(ProfileScopedKey.of(subtitleBackgroundOpacityKey), opacity.coerceIn(0f, 1f))
+            ?.apply()
+    }
+
     actual fun loadSubtitleOutlineWidth(): Int? =
         preferences?.let { sharedPreferences ->
             val key = ProfileScopedKey.of(subtitleOutlineWidthKey)
@@ -740,6 +794,40 @@ actual object PlayerSettingsStorage {
         preferences
             ?.edit()
             ?.putBoolean(ProfileScopedKey.of(androidMemorySafeBufferEnabledKey), enabled)
+            ?.apply()
+    }
+
+    actual fun loadStreamCacheEnabled(): Boolean? =
+        preferences?.let { sharedPreferences ->
+            val key = ProfileScopedKey.of(streamCacheEnabledKey)
+            if (sharedPreferences.contains(key)) {
+                sharedPreferences.getBoolean(key, false)
+            } else {
+                null
+            }
+        }
+
+    actual fun saveStreamCacheEnabled(enabled: Boolean) {
+        preferences
+            ?.edit()
+            ?.putBoolean(ProfileScopedKey.of(streamCacheEnabledKey), enabled)
+            ?.apply()
+    }
+
+    actual fun loadStreamCacheSizeMb(): Int? =
+        preferences?.let { sharedPreferences ->
+            val key = ProfileScopedKey.of(streamCacheSizeMbKey)
+            if (sharedPreferences.contains(key)) {
+                sharedPreferences.getInt(key, 0)
+            } else {
+                null
+            }
+        }
+
+    actual fun saveStreamCacheSizeMb(sizeMb: Int) {
+        preferences
+            ?.edit()
+            ?.putInt(ProfileScopedKey.of(streamCacheSizeMbKey), sizeMb)
             ?.apply()
     }
 
@@ -1215,6 +1303,9 @@ actual object PlayerSettingsStorage {
         loadSubtitleBackgroundColor()?.let { put(subtitleBackgroundColorKey, encodeSyncString(it)) }
         loadSubtitleOutlineColor()?.let { put(subtitleOutlineColorKey, encodeSyncString(it)) }
         loadSubtitleOutlineEnabled()?.let { put(subtitleOutlineEnabledKey, encodeSyncBoolean(it)) }
+        loadSubtitleEdgeStyle()?.let { put(subtitleEdgeStyleKey, encodeSyncString(it)) }
+        loadSubtitleTextOpacity()?.let { put(subtitleTextOpacityKey, encodeSyncFloat(it)) }
+        loadSubtitleBackgroundOpacity()?.let { put(subtitleBackgroundOpacityKey, encodeSyncFloat(it)) }
         loadSubtitleOutlineWidth()?.let { put(subtitleOutlineWidthKey, encodeSyncInt(it)) }
         loadSubtitleBold()?.let { put(subtitleBoldKey, encodeSyncBoolean(it)) }
         loadSubtitleFontSizeSp()?.let { put(subtitleFontSizeSpKey, encodeSyncInt(it)) }
@@ -1234,6 +1325,8 @@ actual object PlayerSettingsStorage {
         }
         loadAndroidLibmpvYuv420pEnabled()?.let { put(androidLibmpvYuv420pEnabledKey, encodeSyncBoolean(it)) }
         loadAndroidMemorySafeBufferEnabled()?.let { put(androidMemorySafeBufferEnabledKey, encodeSyncBoolean(it)) }
+        loadStreamCacheEnabled()?.let { put(streamCacheEnabledKey, encodeSyncBoolean(it)) }
+        loadStreamCacheSizeMb()?.let { put(streamCacheSizeMbKey, encodeSyncInt(it)) }
         loadDecoderPriority()?.let { put(decoderPriorityKey, encodeSyncInt(it)) }
         loadMapDV7ToHevc()?.let { put(mapDV7ToHevcKey, encodeSyncBoolean(it)) }
         loadTunnelingEnabled()?.let { put(tunnelingEnabledKey, encodeSyncBoolean(it)) }
@@ -1296,6 +1389,9 @@ actual object PlayerSettingsStorage {
         payload.decodeSyncString(subtitleBackgroundColorKey)?.let(::saveSubtitleBackgroundColor)
         payload.decodeSyncString(subtitleOutlineColorKey)?.let(::saveSubtitleOutlineColor)
         payload.decodeSyncBoolean(subtitleOutlineEnabledKey)?.let(::saveSubtitleOutlineEnabled)
+        payload.decodeSyncString(subtitleEdgeStyleKey)?.let(::saveSubtitleEdgeStyle)
+        payload.decodeSyncFloat(subtitleTextOpacityKey)?.let(::saveSubtitleTextOpacity)
+        payload.decodeSyncFloat(subtitleBackgroundOpacityKey)?.let(::saveSubtitleBackgroundOpacity)
         payload.decodeSyncInt(subtitleOutlineWidthKey)?.let(::saveSubtitleOutlineWidth)
         payload.decodeSyncBoolean(subtitleBoldKey)?.let(::saveSubtitleBold)
         payload.decodeSyncInt(subtitleFontSizeSpKey)?.let(::saveSubtitleFontSizeSp)
@@ -1314,6 +1410,8 @@ actual object PlayerSettingsStorage {
             ?.let(::saveAndroidLibmpvHardwareDecodingEnabled)
         payload.decodeSyncBoolean(androidLibmpvYuv420pEnabledKey)?.let(::saveAndroidLibmpvYuv420pEnabled)
         payload.decodeSyncBoolean(androidMemorySafeBufferEnabledKey)?.let(::saveAndroidMemorySafeBufferEnabled)
+        payload.decodeSyncBoolean(streamCacheEnabledKey)?.let(::saveStreamCacheEnabled)
+        payload.decodeSyncInt(streamCacheSizeMbKey)?.let(::saveStreamCacheSizeMb)
         payload.decodeSyncInt(decoderPriorityKey)?.let(::saveDecoderPriority)
         payload.decodeSyncBoolean(mapDV7ToHevcKey)?.let(::saveMapDV7ToHevc)
         payload.decodeSyncBoolean(tunnelingEnabledKey)?.let(::saveTunnelingEnabled)

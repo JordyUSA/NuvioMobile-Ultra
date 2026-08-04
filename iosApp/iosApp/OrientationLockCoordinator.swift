@@ -4,6 +4,8 @@ import ComposeApp
 
 private let lockPlayerToLandscapeNotification = Notification.Name("NuvioPlayerLockLandscape")
 private let unlockPlayerOrientationNotification = Notification.Name("NuvioPlayerUnlockOrientation")
+private let allowAutoRotateNotification = Notification.Name("NuvioAllowAutoRotate")
+private let lockPortraitNotification = Notification.Name("NuvioLockPortrait")
 
 final class OrientationLockAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(
@@ -63,6 +65,10 @@ final class OrientationLockCoordinator {
 
     private(set) var supportedOrientations: UIInterfaceOrientationMask = .allButUpsideDown
     private var observers: [NSObjectProtocol] = []
+    /// What the app returns to when the player releases its landscape lock. Tracks the
+    /// Auto-Rotate setting, so leaving the player restores the user's choice rather than
+    /// unconditionally re-allowing rotation.
+    private var browsingOrientations: UIInterfaceOrientationMask = .allButUpsideDown
 
     private init() {}
 
@@ -80,10 +86,29 @@ final class OrientationLockCoordinator {
                 self?.setLandscapeLock(enabled: false)
             }
         )
+        observers.append(
+            center.addObserver(forName: allowAutoRotateNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.setBrowsingOrientations(.allButUpsideDown)
+            }
+        )
+        observers.append(
+            center.addObserver(forName: lockPortraitNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.setBrowsingOrientations(.portrait)
+            }
+        )
+    }
+
+    private func setBrowsingOrientations(_ mask: UIInterfaceOrientationMask) {
+        browsingOrientations = mask
+        // Only take effect immediately when the player is not holding its own lock; otherwise
+        // the player would be yanked out of landscape mid-playback.
+        guard supportedOrientations != .landscape else { return }
+        supportedOrientations = mask
+        requestOrientationUpdate(for: mask, forceRotate: false)
     }
 
     private func setLandscapeLock(enabled: Bool) {
-        let nextOrientations: UIInterfaceOrientationMask = enabled ? .landscape : .allButUpsideDown
+        let nextOrientations: UIInterfaceOrientationMask = enabled ? .landscape : browsingOrientations
         supportedOrientations = nextOrientations
         requestOrientationUpdate(for: nextOrientations, forceRotate: enabled)
     }

@@ -17,6 +17,8 @@ import com.nuvio.app.core.diagnostics.SentryInitializer
 import com.nuvio.app.core.deeplink.handleAppUrl
 import com.nuvio.app.core.network.DnsOverHttpsSettingsStorage
 import com.nuvio.app.core.storage.PlatformLocalAccountDataCleaner
+import com.nuvio.app.core.storage.AppCacheDirectories
+import com.nuvio.app.core.ui.AppOrientationController
 import com.nuvio.app.core.sync.SyncClientIdentityStorage
 import com.nuvio.app.core.ui.AppSystemUiController
 import com.nuvio.app.features.addons.AddonStorage
@@ -43,6 +45,8 @@ import com.nuvio.app.features.home.HomeCatalogSettingsStorage
 import com.nuvio.app.features.mdblist.MdbListSettingsStorage
 import com.nuvio.app.features.notifications.EpisodeReleaseNotificationPlatform
 import com.nuvio.app.features.notifications.EpisodeReleaseNotificationsStorage
+import com.nuvio.app.features.player.VideoStreamCache
+import com.nuvio.app.features.player.VideoStreamCacheCleaner
 import com.nuvio.app.features.player.PlayerSettingsStorage
 import com.nuvio.app.features.player.PlayerTrackPreferenceStorage
 import com.nuvio.app.features.player.ExternalPlayerPlatform
@@ -104,6 +108,12 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         window.setBackgroundDrawableResource(R.color.nuvio_background)
         SyncClientIdentityStorage.initialize(applicationContext)
+        AppCacheDirectories.initialize(applicationContext)
+        AppOrientationController.attach(this)
+        VideoStreamCache.initialize(applicationContext)
+        // Recovers the scratch space a crash or a force-stop left behind, which is the one
+        // path where neither the player-exit nor the app-background sweep ever ran.
+        VideoStreamCacheCleaner.clearAsync()
         // Cast initialisation is soft: on a device without Play services it leaves
         // CastPlatform.isSupported false and the UI omits the Cast button.
         CastPlatform.initialize(applicationContext)
@@ -194,6 +204,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        AppOrientationController.detach(this)
         EpisodeReleaseNotificationPlatform.unbindActivity(this)
         DownloadsLiveStatusPlatform.unbindActivity(this)
         NuvioEnhancedBackupFileBridge.unbindActivity(this)

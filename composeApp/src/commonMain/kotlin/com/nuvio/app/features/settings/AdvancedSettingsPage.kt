@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,20 +27,31 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.nuvio.app.core.i18n.localizedByteSize
+import com.nuvio.app.core.ui.NuvioImageCache
 import com.nuvio.app.core.ui.NuvioTokens
 import com.nuvio.app.core.ui.nuvio
+import com.nuvio.app.features.player.VideoStreamCache
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.watchprogress.ContinueWatchingEnrichmentCache
 import com.nuvio.app.features.watchprogress.WatchProgressRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import nuvio.composeapp.generated.resources.Res
 import nuvio.composeapp.generated.resources.action_cancel
 import nuvio.composeapp.generated.resources.settings_advanced_clear_cw_cache
 import nuvio.composeapp.generated.resources.settings_advanced_clear_cw_cache_done
 import nuvio.composeapp.generated.resources.settings_advanced_clear_cw_cache_subtitle
+import nuvio.composeapp.generated.resources.settings_advanced_image_cache
+import nuvio.composeapp.generated.resources.settings_advanced_image_cache_empty
+import nuvio.composeapp.generated.resources.settings_advanced_image_cache_subtitle
 import nuvio.composeapp.generated.resources.settings_advanced_remember_last_profile
 import nuvio.composeapp.generated.resources.settings_advanced_remember_last_profile_description
 import nuvio.composeapp.generated.resources.settings_advanced_section_cache
+import nuvio.composeapp.generated.resources.settings_advanced_video_cache
+import nuvio.composeapp.generated.resources.settings_advanced_video_cache_empty
+import nuvio.composeapp.generated.resources.settings_advanced_video_cache_subtitle
 import nuvio.composeapp.generated.resources.settings_advanced_section_diagnostics
 import nuvio.composeapp.generated.resources.settings_advanced_section_startup
 import nuvio.composeapp.generated.resources.settings_advanced_sentry_reports
@@ -122,6 +134,28 @@ internal fun LazyListScope.advancedSettingsContent(
             isTablet = isTablet,
         ) {
             SettingsGroup(isTablet = isTablet) {
+                CacheUsageRow(
+                    title = stringResource(Res.string.settings_advanced_image_cache),
+                    emptyDescription = stringResource(Res.string.settings_advanced_image_cache_empty),
+                    isTablet = isTablet,
+                    describeUsage = { usage ->
+                        stringResource(Res.string.settings_advanced_image_cache_subtitle, usage)
+                    },
+                    readSizeBytes = { NuvioImageCache.sizeBytes() },
+                    onClear = { NuvioImageCache.clear() },
+                )
+                SettingsGroupDivider(isTablet = isTablet)
+                CacheUsageRow(
+                    title = stringResource(Res.string.settings_advanced_video_cache),
+                    emptyDescription = stringResource(Res.string.settings_advanced_video_cache_empty),
+                    isTablet = isTablet,
+                    describeUsage = { usage ->
+                        stringResource(Res.string.settings_advanced_video_cache_subtitle, usage)
+                    },
+                    readSizeBytes = { VideoStreamCache.sizeBytes() },
+                    onClear = { VideoStreamCache.clear() },
+                )
+                SettingsGroupDivider(isTablet = isTablet)
                 val scope = rememberCoroutineScope()
                 var cleared by rememberSaveable { mutableStateOf(false) }
                 SettingsNavigationRow(
@@ -147,6 +181,51 @@ internal fun LazyListScope.advancedSettingsContent(
             }
         }
     }
+}
+
+/**
+ * A cache row that reports what it actually occupies on disk and clears it on tap.
+ *
+ * Sizing walks a directory, so it is kept off the main thread and re-read after a clear — a
+ * "Clear" button whose number does not move afterwards gives the user no way to tell whether
+ * anything happened.
+ */
+@Composable
+private fun CacheUsageRow(
+    title: String,
+    emptyDescription: String,
+    isTablet: Boolean,
+    describeUsage: @Composable (String) -> String,
+    readSizeBytes: () -> Long,
+    onClear: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var refreshToken by remember { mutableStateOf(0) }
+    var sizeBytes by remember { mutableStateOf<Long?>(null) }
+
+    LaunchedEffect(refreshToken) {
+        sizeBytes = withContext(Dispatchers.Default) { readSizeBytes() }
+    }
+
+    val usage = sizeBytes
+    val description = when {
+        usage == null -> emptyDescription
+        usage <= 0L -> emptyDescription
+        else -> describeUsage(localizedByteSize(usage))
+    }
+
+    SettingsNavigationRow(
+        title = title,
+        description = description,
+        isTablet = isTablet,
+        enabled = usage != null && usage > 0L,
+        onClick = {
+            scope.launch {
+                withContext(Dispatchers.Default) { onClear() }
+                refreshToken += 1
+            }
+        },
+    )
 }
 
 @Composable

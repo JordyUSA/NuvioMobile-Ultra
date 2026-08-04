@@ -35,6 +35,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CheckCircleOutline
@@ -106,12 +108,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
-import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import coil3.compose.setSingletonImageLoaderFactory
-import coil3.request.CachePolicy
-import coil3.request.crossfade
-import coil3.svg.SvgDecoder
 import com.nuvio.app.core.build.AppFeaturePolicy
 import com.nuvio.app.core.auth.AuthRepository
 import com.nuvio.app.core.auth.AuthState
@@ -123,12 +121,14 @@ import com.nuvio.app.core.format.formatReleaseDateForDisplay
 import com.nuvio.app.core.i18n.localizedByteUnit
 import com.nuvio.app.core.network.NetworkCondition
 import com.nuvio.app.core.network.NetworkStatusRepository
+import com.nuvio.app.core.sync.AppBackgroundMonitor
 import com.nuvio.app.core.sync.AppForegroundMonitor
 import com.nuvio.app.core.sync.ProfileSettingsSync
 import com.nuvio.app.core.sync.RealtimeSyncConfig
 import com.nuvio.app.core.sync.RealtimeSyncInvalidationService
 import com.nuvio.app.core.sync.SyncManager
 import com.nuvio.app.core.ui.LocalNuvioNavBarScrollState
+import com.nuvio.app.core.ui.NuvioImageCache
 import com.nuvio.app.core.ui.NuvioClassicNavigationBar
 import com.nuvio.app.core.ui.NuvioNavigationBar
 import com.nuvio.app.core.ui.NuvioContinueWatchingActionSheet
@@ -141,7 +141,6 @@ import com.nuvio.app.core.ui.PosterZoomOverlayAction
 import com.nuvio.app.core.ui.PlatformBackHandler
 import com.nuvio.app.core.ui.AppSystemUiController
 import com.nuvio.app.core.ui.platformExitApp
-import com.nuvio.app.core.ui.configurePlatformImageLoader
 import com.nuvio.app.core.ui.NuvioToastHost
 import com.nuvio.app.core.ui.NuvioToastController
 import com.nuvio.app.core.ui.NuvioFloatingPrompt
@@ -187,6 +186,7 @@ import com.nuvio.app.features.converter.isActive
 import com.nuvio.app.features.converter.isTerminal
 import com.nuvio.app.features.converter.labelRes
 import com.nuvio.app.features.converter.titleRes
+import com.nuvio.app.features.downloads.DownloadMediaInfoSheet
 import com.nuvio.app.features.downloads.DownloadItem
 import com.nuvio.app.features.downloads.DownloadStatus
 import com.nuvio.app.features.downloads.DownloadsPlatformDownloader
@@ -223,6 +223,7 @@ import com.nuvio.app.features.livetv.LiveTvScreen
 import com.nuvio.app.features.notifications.EpisodeReleaseNotificationsRepository
 import com.nuvio.app.features.p2p.P2pConsentDialog
 import com.nuvio.app.features.p2p.P2pSettingsRepository
+import com.nuvio.app.features.player.VideoStreamCacheCleaner
 import com.nuvio.app.features.player.PlayerLaunch
 import com.nuvio.app.features.player.PlayerLaunchStore
 import com.nuvio.app.features.player.PlayerRoute
@@ -244,6 +245,7 @@ import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.profiles.ProfileSelectionScreen
 import com.nuvio.app.features.profiles.ProfileSwitcherTab
 import com.nuvio.app.features.profiles.parseHexColor
+import com.nuvio.app.features.profiles.normalizedAvatarUrl
 import com.nuvio.app.features.profiles.profileAvatarImageUrl
 import com.nuvio.app.features.profiles.profileBackgroundImageUrl
 import com.nuvio.app.features.search.SearchScreen
@@ -488,17 +490,7 @@ private enum class ProfileEditReturnTarget {
 @Composable
 @Preview
 fun App() {
-    setSingletonImageLoaderFactory { context ->
-        ImageLoader.Builder(context)
-            .crossfade(true)
-            .diskCachePolicy(CachePolicy.ENABLED)
-            .memoryCachePolicy(CachePolicy.ENABLED)
-            .components {
-                add(SvgDecoder.Factory())
-            }
-            .configurePlatformImageLoader()
-            .build()
-    }
+    setSingletonImageLoaderFactory { context -> NuvioImageCache.build(context) }
     val selectedTheme by remember {
         ThemeSettingsRepository.ensureLoaded()
         ThemeSettingsRepository.selectedTheme
@@ -535,6 +527,19 @@ fun App() {
         val pendingCrashReport by remember {
             CrashDiagnostics.pendingReport
         }.collectAsStateWithLifecycle()
+
+        // Custom avatars and backgrounds are per-profile URLs the catalog prefetch does not
+        // cover, and profile selection is the first screen of a cold offline launch.
+        LaunchedEffect(profileState.profiles) {
+            NuvioImageCache.prefetch(
+                profileState.profiles.flatMap { profile ->
+                    listOfNotNull(
+                        normalizedAvatarUrl(profile.avatarUrl),
+                        profileBackgroundImageUrl(profile),
+                    )
+                },
+            )
+        }
 
         LaunchedEffect(
             profileState.activeProfile?.profileIndex,
@@ -860,6 +865,7 @@ private fun MainAppContent(
         // and opening a bottom sheet on top of it races the dismissal animation.
         var convertAfterOverlayDismissTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
         var confirmDownloadDeleteTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
+        var mediaInfoDownloadTarget by remember { mutableStateOf<DownloadItem?>(null) }
         var selectedConversionActionTarget by remember { mutableStateOf<LibraryConversionActionTarget?>(null) }
         var selectedConversionActionAnchor by remember { mutableStateOf<PosterZoomAnchor?>(null) }
         var downloadsErrorTarget by remember { mutableStateOf<String?>(null) }
@@ -1149,6 +1155,14 @@ private fun MainAppContent(
     LaunchedEffect(Unit) {
         AppForegroundMonitor.events().collect {
             NetworkStatusRepository.requestForegroundRefresh()
+        }
+    }
+
+    // The player-exit sweep covers the normal case; this covers leaving the app straight from
+    // the player, or the process being killed while backgrounded.
+    LaunchedEffect(Unit) {
+        AppBackgroundMonitor.events().collect {
+            VideoStreamCacheCleaner.clearAsync()
         }
     }
 
@@ -3762,6 +3776,13 @@ private fun MainAppContent(
                                 },
                             ),
                             PosterZoomOverlayAction(
+                                icon = Icons.Default.Description,
+                                label = stringResource(Res.string.downloads_media_info),
+                                onSelected = {
+                                    mediaInfoDownloadTarget = primaryDownload
+                                },
+                            ),
+                            PosterZoomOverlayAction(
                                 icon = Icons.Default.Tune,
                                 label = stringResource(Res.string.converter_action_convert),
                                 onSelected = {
@@ -3812,6 +3833,16 @@ private fun MainAppContent(
                         },
                     )
                 }
+            }
+
+            mediaInfoDownloadTarget?.let { target ->
+                // Re-read from the repository so a probe finishing while the sheet is open
+                // fills it in, instead of freezing whatever was known at the moment of the tap.
+                val liveTarget = downloadsUiState.items.firstOrNull { it.id == target.id } ?: target
+                DownloadMediaInfoSheet(
+                    item = liveTarget,
+                    onDismiss = { mediaInfoDownloadTarget = null },
+                )
             }
 
             confirmDownloadDeleteTarget?.let { target ->
@@ -4578,7 +4609,7 @@ private fun downloadActionOverlayStatus(item: DownloadItem): String {
     return when (item.status) {
         DownloadStatus.Downloading -> stringResource(Res.string.downloads_status_downloading, size)
         DownloadStatus.Paused -> stringResource(Res.string.downloads_status_paused, size)
-        DownloadStatus.Failed -> item.errorMessage ?: stringResource(Res.string.downloads_status_failed)
+        DownloadStatus.Failed -> item.failureText ?: stringResource(Res.string.downloads_status_failed)
         DownloadStatus.Completed -> stringResource(
             Res.string.downloads_status_completed,
             formatDownloadOverlayBytes(item.totalBytes ?: item.downloadedBytes),

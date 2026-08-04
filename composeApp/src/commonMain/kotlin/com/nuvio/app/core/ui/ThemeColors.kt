@@ -109,6 +109,28 @@ object ThemeColors {
         backgroundCard = Color(0xFF241A1F),
     )
 
+    val Slate = ThemeColorPalette(
+        secondary = Color(0xFF546E7A),
+        secondaryVariant = Color(0xFF37474F),
+        nativeAccentHex = "#546E7A",
+        focusRing = Color(0xFF78909C),
+        focusBackground = Color(0xFF1E2A30),
+        background = Color(0xFF0C0E10),
+        backgroundElevated = Color(0xFF181B1E),
+        backgroundCard = Color(0xFF1E2429),
+    )
+
+    val Mocha = ThemeColorPalette(
+        secondary = Color(0xFF8D6E63),
+        secondaryVariant = Color(0xFF6D4C41),
+        nativeAccentHex = "#8D6E63",
+        focusRing = Color(0xFFA1887F),
+        focusBackground = Color(0xFF33251F),
+        background = Color(0xFF100D0B),
+        backgroundElevated = Color(0xFF1D1815),
+        backgroundCard = Color(0xFF261F1B),
+    )
+
     val Messenger = ThemeColorPalette(
         secondary = Color(0xFF168AFF),
         secondaryVariant = Color(0xFF0072FF),
@@ -164,6 +186,39 @@ object ThemeColors {
         backgroundCard = Color(0xFF2D1E18),
     )
 
+    val Cosmos = ThemeColorPalette(
+        secondary = Color(0xFF6366F1),
+        secondaryVariant = Color(0xFFD946EF),
+        nativeAccentHex = "#6366F1",
+        focusRing = Color(0xFFA78BFA),
+        focusBackground = Color(0xFF241C42),
+        background = Color(0xFF0A0912),
+        backgroundElevated = Color(0xFF161424),
+        backgroundCard = Color(0xFF1F1B33),
+    )
+
+    val Citrus = ThemeColorPalette(
+        secondary = Color(0xFF84CC16),
+        secondaryVariant = Color(0xFFFACC15),
+        nativeAccentHex = "#84CC16",
+        focusRing = Color(0xFFBEF264),
+        focusBackground = Color(0xFF25320F),
+        background = Color(0xFF0C0F07),
+        backgroundElevated = Color(0xFF171C10),
+        backgroundCard = Color(0xFF1F2616),
+    )
+
+    val Midnight = ThemeColorPalette(
+        secondary = Color(0xFF1D4ED8),
+        secondaryVariant = Color(0xFF06B6D4),
+        nativeAccentHex = "#1D4ED8",
+        focusRing = Color(0xFF60A5FA),
+        focusBackground = Color(0xFF13233F),
+        background = Color(0xFF06090F),
+        backgroundElevated = Color(0xFF10151F),
+        backgroundCard = Color(0xFF161E2C),
+    )
+
     val Custom = ThemeColorPalette(
         secondary = ThemeAccentColor.PINK.color,
         secondaryVariant = ThemeAccentColor.CYAN.color,
@@ -202,11 +257,16 @@ object ThemeColors {
             AppTheme.EMERALD -> Emerald
             AppTheme.AMBER -> Amber
             AppTheme.ROSE -> Rose
+            AppTheme.SLATE -> Slate
+            AppTheme.MOCHA -> Mocha
             AppTheme.MESSENGER -> Messenger
             AppTheme.AMETHYST -> Amethyst
             AppTheme.BLOSSOM -> Blossom
             AppTheme.LAGOON -> Lagoon
             AppTheme.SUNSET -> Sunset
+            AppTheme.COSMOS -> Cosmos
+            AppTheme.CITRUS -> Citrus
+            AppTheme.MIDNIGHT -> Midnight
             AppTheme.CUSTOM -> Custom.copy(
                 secondary = accessibleFirst,
                 secondaryVariant = accessibleSecond,
@@ -263,6 +323,30 @@ object ThemeColors {
             Color(0xFFF97316),
             Color(0xFFFB923C),
             Color(0xFFFDBA74),
+        )
+        AppTheme.COSMOS -> listOf(
+            Color(0xFF4338CA),
+            Color(0xFF6366F1),
+            Color(0xFF8B5CF6),
+            Color(0xFFA855F7),
+            Color(0xFFC026D3),
+            Color(0xFFD946EF),
+        )
+        AppTheme.CITRUS -> listOf(
+            Color(0xFF4D7C0F),
+            Color(0xFF65A30D),
+            Color(0xFF84CC16),
+            Color(0xFFA3E635),
+            Color(0xFFEAB308),
+            Color(0xFFFACC15),
+        )
+        AppTheme.MIDNIGHT -> listOf(
+            Color(0xFF1E3A8A),
+            Color(0xFF1D4ED8),
+            Color(0xFF2563EB),
+            Color(0xFF0EA5E9),
+            Color(0xFF06B6D4),
+            Color(0xFF22D3EE),
         )
         AppTheme.CUSTOM -> listOf(
             customFirst,

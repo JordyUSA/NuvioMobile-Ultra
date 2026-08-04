@@ -106,6 +106,9 @@ final class MPVPlayerBridgeImpl: NSObject, NuvioPlayerBridge {
     func configureAudioOutput(audioOutput: String) {
         playerVC?.configureAudioOutput(audioOutput: audioOutput)
     }
+    func configureStreamCache(directory: String?) {
+        ensurePlayerViewController().configureStreamCache(directory: directory)
+    }
     func setPlaybackSpeed(speed: Float) { playerVC?.setSpeed(speed) }
     func setMuted(muted: Bool) { playerVC?.setMuted(muted) }
     func setVolumeBoost(multiplier: Float) { playerVC?.setVolumeBoost(multiplier) }
@@ -172,6 +175,7 @@ final class MPVPlayerBridgeImpl: NSObject, NuvioPlayerBridge {
         backgroundColor: String,
         outlineColor: String,
         outlineSize: Float,
+        shadowOffset: Float,
         bold: Bool,
         fontSize: Float,
         fontFamily: String,
@@ -183,6 +187,7 @@ final class MPVPlayerBridgeImpl: NSObject, NuvioPlayerBridge {
             backgroundColor: backgroundColor,
             outlineColor: outlineColor,
             outlineSize: outlineSize,
+            shadowOffset: shadowOffset,
             bold: bold,
             fontSize: fontSize,
             fontFamily: fontFamily,
@@ -997,6 +1002,31 @@ final class MPVPlayerViewController: UIViewController {
         setStringProperty("ao", resolvedAudioOutput)
     }
 
+    /// Spills mpv's demuxer cache to disk so a backgrounded player does not refetch what it
+    /// already had. Kotlin owns the directory and empties it on player exit, app start and app
+    /// background — mpv has no size ceiling of its own for `cache-on-disk`.
+    ///
+    /// mpv reads these when it opens a stream, so this has to land before the next load.
+    func configureStreamCache(directory: String?) {
+        guard mpv != nil else { return }
+        guard let directory, !directory.isEmpty else {
+            setStringProperty("cache-on-disk", "no")
+            return
+        }
+        setStringProperty("cache", "yes")
+        setStringProperty("cache-dir", directory)
+        setStringProperty("cache-on-disk", "yes")
+        // Without a back-buffer mpv discards data behind the playhead, so seeking backwards
+        // into the band the seek bar draws would go back to the network — which is exactly the
+        // thing the cache is meant to prevent. Sized to match the forward read-ahead.
+        setStringProperty("demuxer-max-bytes", "\(Self.streamCacheBytes)")
+        setStringProperty("demuxer-max-back-bytes", "\(Self.streamCacheBytes)")
+    }
+
+    /// Read-ahead and back-buffer each get this much. The on-disk cache spills past it, so this
+    /// bounds memory rather than how much of the file may be cached.
+    private static let streamCacheBytes = 64 * 1024 * 1024
+
     func setSpeed(_ speed: Float) {
         guard mpv != nil else { return }
         var s = Double(speed)
@@ -1127,6 +1157,7 @@ final class MPVPlayerViewController: UIViewController {
         backgroundColor: String,
         outlineColor: String,
         outlineSize: Float,
+        shadowOffset: Float,
         bold: Bool,
         fontSize: Float,
         fontFamily: String,
@@ -1139,7 +1170,14 @@ final class MPVPlayerViewController: UIViewController {
         checkError(mpv_set_property_string(mpv, "sub-color", textColor))
         checkError(mpv_set_property_string(mpv, "sub-back-color", backgroundColor))
         checkError(mpv_set_property_string(mpv, "sub-outline-color", outlineColor))
-        checkError(mpv_set_property_string(mpv, "sub-border-style", backgroundColor.hasPrefix("#00") ? "outline-and-shadow" : "opaque-box"))
+        // The shadow reuses the outline colour: Kotlin only offers one edge colour, and a
+        // shadow in a second unrelated colour is not something a user asked for.
+        checkError(mpv_set_property_string(mpv, "sub-shadow-color", outlineColor))
+        // opaque-box replaces the edge entirely, so it is only right when there is no edge to
+        // draw and the background is actually opaque.
+        let hasEdge = outlineSize > 0 || shadowOffset > 0
+        let borderStyle = (!hasEdge && !backgroundColor.hasPrefix("#00")) ? "opaque-box" : "outline-and-shadow"
+        checkError(mpv_set_property_string(mpv, "sub-border-style", borderStyle))
         setStringProperty("sub-bold", bold ? "yes" : "no")
         if let fontDirectory, !fontDirectory.isEmpty {
             checkError(mpv_set_property_string(mpv, "sub-fonts-dir", fontDirectory))
@@ -1148,6 +1186,9 @@ final class MPVPlayerViewController: UIViewController {
 
         var outline = Double(outlineSize)
         checkError(mpv_set_property(mpv, "sub-outline-size", MPV_FORMAT_DOUBLE, &outline))
+
+        var shadow = Double(shadowOffset)
+        checkError(mpv_set_property(mpv, "sub-shadow-offset", MPV_FORMAT_DOUBLE, &shadow))
 
         var size = Double(fontSize)
         checkError(mpv_set_property(mpv, "sub-font-size", MPV_FORMAT_DOUBLE, &size))
@@ -1205,7 +1246,10 @@ final class MPVPlayerViewController: UIViewController {
         guard mpv != nil else { return }
         let duration = getDouble("duration")
         let position = getDouble("time-pos")
-        let cached = getDouble("demuxer-cache-time")
+        // demuxer-cache-time is the ABSOLUTE timestamp of the last buffered data, not a
+        // duration ahead of the playhead. Adding position to it double-counts, which drove the
+        // seek bar's buffered band to full within seconds of opening a file.
+        let cachedUntil = getDouble("demuxer-cache-time")
         let speed = getDouble("speed")
         let paused = getFlag("pause")
         let eofReached = getFlag("eof-reached")
@@ -1229,7 +1273,7 @@ final class MPVPlayerViewController: UIViewController {
         isPlayerEnded = eofReached
         durationMs = Int64(duration * 1000)
         positionMs = Int64(max(position, 0) * 1000)
-        bufferedMs = Int64(max(position + cached, 0) * 1000)
+        bufferedMs = Int64(max(cachedUntil, max(position, 0)) * 1000)
         currentSpeed = Float(speed > 0 ? speed : 1.0)
 
         let shouldPublishNowPlayingState = !isPlayerLoading || isPlayerPlaying || durationMs > 0 || positionMs > 0

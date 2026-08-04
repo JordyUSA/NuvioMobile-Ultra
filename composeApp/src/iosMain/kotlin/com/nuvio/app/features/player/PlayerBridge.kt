@@ -42,6 +42,13 @@ interface NuvioPlayerBridge {
         gamma: Int,
     )
     fun configureAudioOutput(audioOutput: String)
+    /**
+     * Points mpv's demuxer cache at [directory], or turns disk caching off when null.
+     *
+     * Must be applied before the file is loaded: mpv reads `cache-on-disk` and `cache-dir`
+     * when it opens a stream, so changing them mid-playback affects only the next one.
+     */
+    fun configureStreamCache(directory: String?)
     fun setPlaybackSpeed(speed: Float)
     fun setMuted(muted: Boolean)
     fun setVolumeBoost(multiplier: Float)
@@ -71,6 +78,8 @@ interface NuvioPlayerBridge {
         backgroundColor: String,
         outlineColor: String,
         outlineSize: Float,
+        /** Shadow distance in mpv units; 0 disables the shadow. */
+        shadowOffset: Float,
         bold: Boolean,
         fontSize: Float,
         fontFamily: String,

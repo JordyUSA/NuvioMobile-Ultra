@@ -5,7 +5,12 @@ import nuvio.composeapp.generated.resources.theme_amber
 import nuvio.composeapp.generated.resources.theme_amethyst
 import nuvio.composeapp.generated.resources.theme_blossom
 import nuvio.composeapp.generated.resources.theme_custom
+import nuvio.composeapp.generated.resources.theme_citrus
 import nuvio.composeapp.generated.resources.theme_crimson
+import nuvio.composeapp.generated.resources.theme_midnight
+import nuvio.composeapp.generated.resources.theme_mocha
+import nuvio.composeapp.generated.resources.theme_cosmos
+import nuvio.composeapp.generated.resources.theme_slate
 import nuvio.composeapp.generated.resources.theme_emerald
 import nuvio.composeapp.generated.resources.theme_ocean
 import nuvio.composeapp.generated.resources.theme_lagoon
@@ -23,11 +28,16 @@ enum class AppTheme {
     EMERALD,
     AMBER,
     ROSE,
+    SLATE,
+    MOCHA,
     MESSENGER,
     AMETHYST,
     BLOSSOM,
     LAGOON,
     SUNSET,
+    COSMOS,
+    CITRUS,
+    MIDNIGHT,
     CUSTOM,
     WHITE,
 }
@@ -38,6 +48,9 @@ val AppTheme.isEnhanced: Boolean
         this == AppTheme.BLOSSOM ||
         this == AppTheme.LAGOON ||
         this == AppTheme.SUNSET ||
+        this == AppTheme.COSMOS ||
+        this == AppTheme.CITRUS ||
+        this == AppTheme.MIDNIGHT ||
         this == AppTheme.CUSTOM
 
 val AppTheme.labelRes: StringResource
@@ -48,11 +61,16 @@ val AppTheme.labelRes: StringResource
         AppTheme.EMERALD -> Res.string.theme_emerald
         AppTheme.AMBER -> Res.string.theme_amber
         AppTheme.ROSE -> Res.string.theme_rose
+        AppTheme.SLATE -> Res.string.theme_slate
+        AppTheme.MOCHA -> Res.string.theme_mocha
         AppTheme.MESSENGER -> Res.string.theme_messenger
         AppTheme.AMETHYST -> Res.string.theme_amethyst
         AppTheme.BLOSSOM -> Res.string.theme_blossom
         AppTheme.LAGOON -> Res.string.theme_lagoon
         AppTheme.SUNSET -> Res.string.theme_sunset
+        AppTheme.COSMOS -> Res.string.theme_cosmos
+        AppTheme.CITRUS -> Res.string.theme_citrus
+        AppTheme.MIDNIGHT -> Res.string.theme_midnight
         AppTheme.CUSTOM -> Res.string.theme_custom
         AppTheme.WHITE -> Res.string.theme_white
     }
