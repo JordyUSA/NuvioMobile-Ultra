@@ -63,6 +63,7 @@ import co.touchlab.kermit.Logger
 import com.nuvio.app.core.build.AppFeaturePolicy
 import com.nuvio.app.core.format.formatReleaseDateForDisplay
 import com.nuvio.app.core.i18n.localizedSeasonEpisodeCode
+import com.nuvio.app.core.ui.NuvioAnimatedDownloadedBadge
 import com.nuvio.app.core.ui.NuvioAnimatedWatchedBadge
 import com.nuvio.app.core.ui.NuvioCardDepthSurface
 import com.nuvio.app.core.ui.NuvioProgressBar
@@ -102,6 +103,8 @@ fun DetailSeriesContent(
     episodeCardStyle: MetaEpisodeCardStyle = MetaEpisodeCardStyle.Horizontal,
     progressByVideoId: Map<String, WatchProgressEntry> = emptyMap(),
     watchedKeys: Set<String> = emptySet(),
+    /** Video ids, keyed the same way as [progressByVideoId], of episodes already on the device. */
+    downloadedVideoIds: Set<String> = emptySet(),
     episodeRatings: Map<Pair<Int, Int>, Double> = emptyMap(),
     blurUnwatchedEpisodes: Boolean = false,
     showEpisodeRatings: Boolean = true,
@@ -297,6 +300,7 @@ fun DetailSeriesContent(
                             parentMetaId = meta.id,
                             metaType = meta.type,
                             watchedKeys = watchedKeys,
+                            downloadedVideoIds = downloadedVideoIds,
                             fallbackImage = meta.background ?: meta.poster,
                             progressByVideoId = progressByVideoId,
                             episodeRatings = episodeRatings,
@@ -329,6 +333,7 @@ fun DetailSeriesContent(
                                             metaId = meta.id,
                                             episode = episode,
                                     ),
+                                    isDownloaded = episodeVideoId in downloadedVideoIds,
                                     blurUnwatchedEpisodes = blurUnwatchedEpisodes,
                                     showEpisodeRatings = showEpisodeRatings,
                                     sizing = sizing,
@@ -601,6 +606,7 @@ private fun EpisodeHorizontalRow(
     parentMetaId: String,
     metaType: String,
     watchedKeys: Set<String>,
+    downloadedVideoIds: Set<String>,
     fallbackImage: String?,
     progressByVideoId: Map<String, WatchProgressEntry>,
     episodeRatings: Map<Pair<Int, Int>, Double>,
@@ -663,6 +669,7 @@ private fun EpisodeHorizontalRow(
                         metaId = parentMetaId,
                         episode = episode,
                 ),
+                isDownloaded = episodeVideoId in downloadedVideoIds,
                 blurUnwatchedEpisodes = blurUnwatchedEpisodes,
                 showEpisodeRatings = showEpisodeRatings,
                 metrics = rowMetrics,
@@ -681,6 +688,7 @@ private fun EpisodeHorizontalCard(
     progressEntry: WatchProgressEntry?,
     imdbRating: Double?,
     isWatched: Boolean,
+    isDownloaded: Boolean,
     blurUnwatchedEpisodes: Boolean,
     showEpisodeRatings: Boolean,
     metrics: EpisodeHorizontalCardMetrics,
@@ -743,6 +751,13 @@ private fun EpisodeHorizontalCard(
             isVisible = isWatched,
             modifier = Modifier
                 .align(Alignment.TopEnd)
+                .padding(metrics.contentPadding),
+        )
+
+        NuvioAnimatedDownloadedBadge(
+            isVisible = isDownloaded,
+            modifier = Modifier
+                .align(Alignment.TopStart)
                 .padding(metrics.contentPadding),
         )
 
@@ -1053,6 +1068,7 @@ private fun EpisodeListCard(
     progressEntry: WatchProgressEntry?,
     imdbRating: Double?,
     isWatched: Boolean,
+    isDownloaded: Boolean,
     blurUnwatchedEpisodes: Boolean,
     showEpisodeRatings: Boolean,
     sizing: SeriesContentSizing,
@@ -1127,6 +1143,13 @@ private fun EpisodeListCard(
                     isVisible = isWatched,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
+                        .padding(8.dp),
+                )
+
+                NuvioAnimatedDownloadedBadge(
+                    isVisible = isDownloaded,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
                         .padding(8.dp),
                 )
             }

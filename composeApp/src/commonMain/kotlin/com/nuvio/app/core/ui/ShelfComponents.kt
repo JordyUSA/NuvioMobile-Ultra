@@ -22,7 +22,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -47,7 +46,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import nuvio.composeapp.generated.resources.Res
-import nuvio.composeapp.generated.resources.downloads_action_more
 import nuvio.composeapp.generated.resources.home_view_all
 import nuvio.composeapp.generated.resources.poster_logo_content_description
 import org.jetbrains.compose.resources.stringResource
@@ -152,11 +150,6 @@ fun NuvioPosterCard(
     isWatched: Boolean = false,
     /** Short corner label, e.g. a resolution on a downloaded file. */
     topStartBadge: String? = null,
-    /**
-     * Opens the same menu as a long press. Long press is not discoverable on its own, so cards
-     * that have a menu also need a visible affordance.
-     */
-    onOverflowClick: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -248,26 +241,6 @@ fun NuvioPosterCard(
                         .background(Color.Black.copy(alpha = 0.62f))
                         .padding(horizontal = NuvioTokens.Space.s6, vertical = NuvioTokens.Space.s2),
                 )
-            }
-
-            if (onOverflowClick != null) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(NuvioTokens.Space.s6)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.62f))
-                        .clickable(onClick = onOverflowClick)
-                        .padding(NuvioTokens.Space.s2),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.MoreVert,
-                        contentDescription = stringResource(Res.string.downloads_action_more),
-                        tint = Color.White,
-                        modifier = Modifier.size(NuvioTokens.Space.s18),
-                    )
-                }
             }
 
             NuvioPosterWatchedOverlay(isWatched = isWatched)

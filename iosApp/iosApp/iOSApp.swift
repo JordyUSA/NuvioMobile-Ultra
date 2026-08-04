@@ -20,6 +20,14 @@ struct iOSApp: App {
     /// HTTP requests, which letting it deallocate would silently cut off.
     private let dlnaTransport = DlnaTransport.install()
 
+    /// Backs `ConversionEngine.ios.kt`'s FFmpegKit conversions. Held for the same lifetime reason
+    /// as the bridges above: it owns any in-flight conversion and its background-task assertion.
+    private let converterBridge = ConverterBridgeImpl.install()
+
+    /// Backs `DownloadsPlatformDownloader.ios.kt`'s share sheet and Low Power Mode check. Stateless
+    /// itself, but installed alongside the others so every Kotlin-side bridge is wired in one place.
+    private let downloadsPlatformBridge = DownloadsPlatformBridgeImpl.install()
+
     var body: some Scene {
         WindowGroup {
             ContentView()

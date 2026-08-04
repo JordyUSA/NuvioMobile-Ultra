@@ -79,7 +79,7 @@ internal actual object DownloadsPlatformDownloader {
         val handle = IosDownloadsTaskHandle(job)
 
         scope.launch {
-            val downloadsDirectory = downloadsDirectoryPath()
+            val downloadsDirectory = downloadsDirectory()
             val destinationPath = "$downloadsDirectory/${request.destinationFileName}"
             val tempPath = "$downloadsDirectory/${request.destinationFileName}.part"
 
@@ -159,11 +159,11 @@ internal actual object DownloadsPlatformDownloader {
         }
 
         val fileName = path.substringAfterLast('/').takeIf { it.isNotBlank() } ?: return false
-        return removePathIfExists("${downloadsDirectoryPath()}/$fileName")
+        return removePathIfExists("${downloadsDirectory()}/$fileName")
     }
 
     actual fun removePartialFile(destinationFileName: String): Boolean {
-        val tempPath = "${downloadsDirectoryPath()}/$destinationFileName.part"
+        val tempPath = "${downloadsDirectory()}/$destinationFileName.part"
         return removePathIfExists(tempPath)
     }
 
@@ -177,7 +177,7 @@ internal actual object DownloadsPlatformDownloader {
         val fileName = destinationFileName.trim().takeIf { it.isNotBlank() }
             ?: localFileUri?.toLocalPath()?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
             ?: return null
-        val currentPath = "${downloadsDirectoryPath()}/$fileName"
+        val currentPath = "${downloadsDirectory()}/$fileName"
         return if (NSFileManager.defaultManager.fileExistsAtPath(currentPath)) {
             NSURL.fileURLWithPath(currentPath).absoluteString ?: "file://$currentPath"
         } else {
@@ -185,12 +185,35 @@ internal actual object DownloadsPlatformDownloader {
         }
     }
 
+    actual fun downloadsDirectoryPath(): String? = downloadsDirectory()
+
+    @OptIn(ExperimentalForeignApi::class)
+    actual fun renameFile(fromLocalFileUri: String, toFileName: String): String? {
+        val manager = NSFileManager.defaultManager
+        val sourcePath = fromLocalFileUri.toLocalPath()
+            ?.takeIf { manager.fileExistsAtPath(it) }
+            ?: return null
+        val destinationPath = "${downloadsDirectory()}/$toFileName"
+        if (manager.fileExistsAtPath(destinationPath)) {
+            removePathIfExists(destinationPath)
+        }
+
+        val moved = manager.moveItemAtPath(sourcePath, toPath = destinationPath, error = null)
+        if (!moved) return null
+        return NSURL.fileURLWithPath(destinationPath).absoluteString ?: "file://$destinationPath"
+    }
+
+    actual fun fileSizeBytes(localFileUri: String): Long? =
+        localFileUri.toLocalPath()
+            ?.let(::fileSizeOrNull)
+            ?.takeIf { it > 0L }
+
     actual fun cacheSubtitleFiles(
         subtitles: List<StreamSubtitle>,
         companionBaseFileName: String,
     ): List<StreamSubtitle> {
         if (subtitles.isEmpty()) return emptyList()
-        val subtitlesDirectory = "${downloadsDirectoryPath()}/subtitles"
+        val subtitlesDirectory = "${downloadsDirectory()}/subtitles"
         NSFileManager.defaultManager.createDirectoryAtPath(
             path = subtitlesDirectory,
             withIntermediateDirectories = true,
@@ -253,7 +276,7 @@ internal actual object DownloadsPlatformDownloader {
     }
 
     actual fun openDownloadsDirectory(): Boolean {
-        val url = NSURL.fileURLWithPath(downloadsDirectoryPath())
+        val url = NSURL.fileURLWithPath(downloadsDirectory())
         UIApplication.sharedApplication.openURL(
             url = url,
             options = emptyMap<Any?, Any>(),
@@ -261,6 +284,26 @@ internal actual object DownloadsPlatformDownloader {
         )
         return true
     }
+
+    actual fun shareFile(localFileUri: String, title: String): Boolean {
+        val path = localFileUri.toLocalPath() ?: return false
+        if (!NSFileManager.defaultManager.fileExistsAtPath(path)) return false
+        return DownloadsPlatformHost.requireBridge()?.shareFile(path, title) ?: false
+    }
+
+    actual fun availableStorageBytes(): Long? {
+        val attributes = NSFileManager.defaultManager
+            .attributesOfFileSystemForPath(downloadsDirectory(), error = null)
+            ?: return null
+        return when (val value = attributes["NSFileSystemFreeSize"]) {
+            is Long -> value
+            is Number -> value.toLong()
+            else -> null
+        }
+    }
+
+    actual fun isLowPowerModeActive(): Boolean =
+        DownloadsPlatformHost.requireBridge()?.isLowPowerModeActive() ?: false
 }
 
 private class IosDownloadsTaskHandle(
@@ -463,7 +506,7 @@ private fun NSURLResponse?.toDownloadResult(): IosDownloadResult {
 }
 
 @OptIn(ExperimentalForeignApi::class)
-private fun downloadsDirectoryPath(): String {
+private fun downloadsDirectory(): String {
     val root = NSHomeDirectory().trimEnd('/')
     val path = "$root/Documents/nuvio_downloads"
     NSFileManager.defaultManager.createDirectoryAtPath(

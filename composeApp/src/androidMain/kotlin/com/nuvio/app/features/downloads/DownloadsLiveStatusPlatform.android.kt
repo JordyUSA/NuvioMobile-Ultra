@@ -17,6 +17,10 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.nuvio.app.core.deeplink.buildDownloadsDeepLinkUrl
+import com.nuvio.app.features.converter.ConversionJob
+import com.nuvio.app.features.converter.ConversionStatus
+import com.nuvio.app.features.converter.ConverterRepository
+import com.nuvio.app.features.converter.isActive
 import kotlinx.coroutines.runBlocking
 import nuvio.composeapp.generated.resources.*
 import org.jetbrains.compose.resources.getString
@@ -39,9 +43,97 @@ internal actual object DownloadsLiveStatusPlatform {
     private val artworkCache = mutableMapOf<String, Bitmap?>()
     private var foregroundServiceRequested = false
 
+    /**
+     * Conversions share the downloads foreground service and its notification rather than adding a
+     * second of each: both are long-running background work on the same files, and two competing
+     * persistent notifications would be worse than one that describes both.
+     */
+    private var activeConversions: List<ConversionJob> = emptyList()
+    private var lastConversionRenderKey: String? = null
+    private val lastConversionStatusById = mutableMapOf<String, ConversionStatus>()
+
     fun initialize(context: Context) {
         appContext = context.applicationContext
         ensureNotificationChannel()
+        ConverterRepository.onQueueChanged = ::onConversionsChanged
+    }
+
+    /**
+     * Called on every queue change, which includes each progress tick, so the render key is
+     * compared before touching the notification — the same reason [lastRenderStateById] exists for
+     * downloads.
+     */
+    private fun onConversionsChanged(jobs: List<ConversionJob>) {
+        val context = appContext ?: return
+        activeConversions = jobs.filter { it.isActive }
+        notifyConversionCompletions(context, jobs)
+
+        val renderKey = activeConversions.joinToString("|") { "${it.id}:${it.status}:${it.progressPercent}" }
+        if (renderKey == lastConversionRenderKey) return
+        lastConversionRenderKey = renderKey
+
+        syncForegroundService(context, DownloadsRepository.uiState.value.items)
+    }
+
+    /**
+     * Same diff shape as the download-completion branch of [onItemsChanged]: a notification fires
+     * only for a job seen active in a *previous* call that has since gone terminal, so restoring an
+     * already-finished job from disk on launch never fires one.
+     */
+    private fun notifyConversionCompletions(context: Context, jobs: List<ConversionJob>) {
+        val seenIds = mutableSetOf<String>()
+        jobs.forEach { job ->
+            seenIds += job.id
+            val previousStatus = lastConversionStatusById[job.id]
+            lastConversionStatusById[job.id] = job.status
+
+            val justFinished = previousStatus != null &&
+                previousStatus.isActive &&
+                (job.status == ConversionStatus.Completed || job.status == ConversionStatus.Failed)
+            if (!justFinished || !canPostNotifications(context)) return@forEach
+
+            runCatching {
+                NotificationManagerCompat.from(context).notify(
+                    notificationId("cv:${job.id}"),
+                    buildConversionCompletionNotification(context, job),
+                )
+            }
+        }
+        lastConversionStatusById.keys.retainAll(seenIds)
+    }
+
+    private fun buildConversionCompletionNotification(context: Context, job: ConversionJob): android.app.Notification {
+        val launchIntent = Intent(context, com.nuvio.app.MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = android.net.Uri.parse(buildDownloadsDeepLinkUrl())
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val launchPendingIntent = PendingIntent.getActivity(
+            context,
+            notificationId("cv:${job.id}"),
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val contentText = if (job.status == ConversionStatus.Completed) {
+            runBlocking { getString(Res.string.converter_notification_completed) }
+        } else {
+            job.errorMessage?.takeIf { it.isNotBlank() }
+                ?: runBlocking { getString(Res.string.converter_notification_failed) }
+        }
+
+        return NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(com.nuvio.app.R.drawable.ic_notification_small)
+            .setContentTitle(job.title)
+            .setContentText(contentText)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setContentIntent(launchPendingIntent)
+            .build()
     }
 
     fun bindActivity(activity: ComponentActivity) {
@@ -279,19 +371,26 @@ internal actual object DownloadsLiveStatusPlatform {
         )
 
         val contentTitle = runBlocking { getString(Res.string.downloads_channel_name) }
+        val conversionText = buildConversionSummary()
         val contentText = when {
-            primaryItem == null -> contentTitle
-            downloadingItems.size == 1 -> listOf(
-                buildSubtitle(primaryItem),
-                buildMetadata(primaryItem),
-            ).filter { it.isNotBlank() }.joinToString(" • ")
-            else -> runBlocking {
-                getString(
-                    Res.string.downloads_live_multiple_active,
-                    downloadingItems.size,
-                    buildSubtitle(primaryItem),
-                )
-            }
+            // With nothing downloading, a running conversion is the only thing worth describing —
+            // otherwise the notification would just repeat its own title.
+            primaryItem == null -> conversionText ?: contentTitle
+            downloadingItems.size == 1 -> listOfNotNull(
+                buildSubtitle(primaryItem).takeIf { it.isNotBlank() },
+                buildMetadata(primaryItem).takeIf { it.isNotBlank() },
+                conversionText,
+            ).joinToString(" • ")
+            else -> listOfNotNull(
+                runBlocking {
+                    getString(
+                        Res.string.downloads_live_multiple_active,
+                        downloadingItems.size,
+                        buildSubtitle(primaryItem),
+                    )
+                },
+                conversionText,
+            ).joinToString(" • ")
         }
 
         val builder = NotificationCompat.Builder(context, channelId)
@@ -531,7 +630,7 @@ internal actual object DownloadsLiveStatusPlatform {
         context.getSharedPreferences(notificationsPrefName, Context.MODE_PRIVATE)
 
     private fun syncForegroundService(context: Context, items: List<DownloadItem>) {
-        if (items.any { it.status == DownloadStatus.Downloading }) {
+        if (items.any { it.status == DownloadStatus.Downloading } || activeConversions.isNotEmpty()) {
             if (!foregroundServiceRequested) {
                 DownloadsForegroundService.start(context)
                 foregroundServiceRequested = true
@@ -548,6 +647,21 @@ internal actual object DownloadsLiveStatusPlatform {
             runCatching {
                 NotificationManagerCompat.from(context).cancel(foregroundNotificationId)
             }
+        }
+    }
+
+    /** "Converting Blade Runner • 42%", or null when nothing is converting. */
+    private fun buildConversionSummary(): String? {
+        val running = activeConversions.firstOrNull { it.status == ConversionStatus.Running }
+            ?: activeConversions.firstOrNull()
+            ?: return null
+        val title = runBlocking { getString(Res.string.converter_notification_title) }
+        return if (running.progressPercent in 0..100) {
+            runBlocking {
+                getString(Res.string.converter_notification_progress, title, running.progressPercent)
+            }
+        } else {
+            title
         }
     }
 

@@ -160,6 +160,22 @@ fun MetaDetailsScreen(
     val downloadedMeta = remember(downloadsUiState.items, type, id) {
         DownloadsRepository.findOfflineMetaDetails(type, id)
     }
+    // Keyed the same way `progressByVideoId` is, so the episode list can look both up with one
+    // consistent id rather than reasoning about season/episode pairs a second time.
+    val downloadedVideoIds = remember(downloadsUiState.items, id) {
+        downloadsUiState.items
+            .asSequence()
+            .filter { it.parentMetaId == id && it.isPlayable }
+            .map { item ->
+                buildPlaybackVideoId(
+                    parentMetaId = item.parentMetaId,
+                    seasonNumber = item.seasonNumber,
+                    episodeNumber = item.episodeNumber,
+                    fallbackVideoId = item.videoId,
+                )
+            }
+            .toSet()
+    }
     val offlineDetailsAvailable = offlineMode && downloadedMeta != null
     val displayedMeta = if (offlineDetailsAvailable) {
         downloadedMeta
@@ -1182,6 +1198,7 @@ fun MetaDetailsScreen(
                                 onTrailerClick = resolveTrailer,
                                 progressByVideoId = progressByVideoId,
                                 watchedKeys = watchedUiState.watchedKeys,
+                                downloadedVideoIds = downloadedVideoIds,
                                 blurUnwatchedEpisodes = metaScreenSettingsUiState.blurUnwatchedEpisodes,
                                 showEpisodeRatings = metaScreenSettingsUiState.showEpisodeRatings,
                                 onEpisodeClick = onEpisodePlayClick,
@@ -1642,6 +1659,7 @@ private fun LazyListScope.configuredMetaSectionItems(
     onTrailerClick: (MetaTrailer) -> Unit,
     progressByVideoId: Map<String, WatchProgressEntry>,
     watchedKeys: Set<String>,
+    downloadedVideoIds: Set<String>,
     blurUnwatchedEpisodes: Boolean,
     showEpisodeRatings: Boolean,
     onEpisodeClick: (MetaVideo) -> Unit,
@@ -1727,6 +1745,7 @@ private fun LazyListScope.configuredMetaSectionItems(
                     onTrailerClick = onTrailerClick,
                     progressByVideoId = progressByVideoId,
                     watchedKeys = watchedKeys,
+                    downloadedVideoIds = downloadedVideoIds,
                     blurUnwatchedEpisodes = blurUnwatchedEpisodes,
                     showEpisodeRatings = showEpisodeRatings,
                     onEpisodeClick = onEpisodeClick,
@@ -1877,6 +1896,7 @@ private fun ConfiguredMetaSections(
     onTrailerClick: (MetaTrailer) -> Unit,
     progressByVideoId: Map<String, WatchProgressEntry>,
     watchedKeys: Set<String>,
+    downloadedVideoIds: Set<String>,
     blurUnwatchedEpisodes: Boolean,
     showEpisodeRatings: Boolean,
     onEpisodeClick: (MetaVideo) -> Unit,
@@ -1996,6 +2016,7 @@ private fun ConfiguredMetaSections(
                         episodeCardStyle = settings.episodeCardStyle,
                         progressByVideoId = progressByVideoId,
                         watchedKeys = watchedKeys,
+                        downloadedVideoIds = downloadedVideoIds,
                         episodeRatings = episodeImdbRatings,
                         blurUnwatchedEpisodes = blurUnwatchedEpisodes,
                         showEpisodeRatings = showEpisodeRatings,

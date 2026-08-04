@@ -1,5 +1,8 @@
 package com.nuvio.app.features.library
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -21,6 +24,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -42,11 +46,14 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Share
 import com.nuvio.app.core.ui.NuvioAsyncImage
 import com.nuvio.app.core.ui.NuvioLoadingIndicator
 import androidx.compose.material3.Icon
@@ -91,11 +98,16 @@ import com.nuvio.app.core.ui.NuvioDropdownOption
 import com.nuvio.app.core.ui.NuvioScreen
 import com.nuvio.app.core.ui.NuvioNetworkOfflineCard
 import com.nuvio.app.core.ui.NuvioScreenHeader
+import com.nuvio.app.core.ui.NuvioStatusModal
 import com.nuvio.app.core.ui.NuvioViewAllPillSize
 import com.nuvio.app.core.ui.NuvioShelfSection
+import com.nuvio.app.core.ui.PillTone
 import com.nuvio.app.core.ui.PosterZoomAnchor
 import com.nuvio.app.core.ui.PosterZoomAnchorHolder
 import com.nuvio.app.core.ui.PosterCardStyleRepository
+import com.nuvio.app.core.ui.SelectionActionBar
+import com.nuvio.app.core.ui.StatusPill
+import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.core.ui.nuvioConsumePointerEvents
 import com.nuvio.app.core.ui.posterCardClickable
 import com.nuvio.app.features.cloud.CloudLibraryFile
@@ -103,14 +115,28 @@ import com.nuvio.app.features.cloud.CloudLibraryItem
 import com.nuvio.app.features.cloud.CloudLibraryItemType
 import com.nuvio.app.features.cloud.CloudLibraryRepository
 import com.nuvio.app.features.cloud.CloudLibraryUiState
+import com.nuvio.app.features.converter.ConversionJob
+import com.nuvio.app.features.converter.ConversionStatus
+import com.nuvio.app.features.converter.ConverterRepository
+import com.nuvio.app.features.converter.ConverterUiState
+import com.nuvio.app.features.converter.isActive
+import com.nuvio.app.features.converter.isTerminal
+import com.nuvio.app.features.converter.labelRes
 import com.nuvio.app.features.debrid.DebridSettingsRepository
 import com.nuvio.app.features.details.MetaDetails
 import com.nuvio.app.features.details.MetaDetailsRepository
 import com.nuvio.app.features.details.MetaVideo
+import com.nuvio.app.features.downloads.DownloadFormatProbeCache
 import com.nuvio.app.features.downloads.DownloadItem
+import com.nuvio.app.features.downloads.DownloadStatus
+import com.nuvio.app.features.downloads.DownloadsListEntry
+import com.nuvio.app.features.downloads.DownloadsPlatformDownloader
 import com.nuvio.app.features.downloads.DownloadsRepository
 import com.nuvio.app.features.downloads.DownloadsUiState
+import com.nuvio.app.features.downloads.buildDownloadsListEntries
 import com.nuvio.app.features.downloads.downloadProgressInfoLines
+import com.nuvio.app.features.downloads.formatDownloadBytes
+import com.nuvio.app.features.downloads.originalFormatLabel
 import com.nuvio.app.features.downloads.resolutionBadge
 import com.nuvio.app.features.downloads.sortedForSeriesDownloads
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
@@ -156,6 +182,8 @@ fun LibraryScreen(
     onOpenDownload: ((DownloadItem) -> Unit)? = null,
     downloadActionCommands: Flow<LibraryDownloadActionCommand> = emptyFlow(),
     onDownloadLongClick: ((LibraryDownloadActionTarget, PosterZoomAnchor?) -> Unit)? = null,
+    onConversionLongClick: ((LibraryConversionActionTarget, PosterZoomAnchor?) -> Unit)? = null,
+    onConvertDownloads: ((List<String>) -> Unit)? = null,
 ) {
     val uiState by remember {
         LibraryRepository.ensureLoaded()
@@ -174,6 +202,16 @@ fun LibraryScreen(
         DownloadsRepository.ensureLoaded()
         DownloadsRepository.uiState
     }.collectAsStateWithLifecycle()
+    val converterUiState by remember {
+        ConverterRepository.ensureLoaded()
+        ConverterRepository.uiState
+    }.collectAsStateWithLifecycle()
+    val downloadsListEntries = remember(downloadsUiState.items, converterUiState.jobs) {
+        buildDownloadsListEntries(downloadsUiState.items, converterUiState)
+    }
+    val downloadsSelectableEntryIds = remember(downloadsListEntries) {
+        downloadsListEntries.map { it.entryId }.toSet()
+    }
     val homeCatalogSettingsUiState by remember {
         HomeCatalogSettingsRepository.snapshot()
         HomeCatalogSettingsRepository.uiState
@@ -196,6 +234,58 @@ fun LibraryScreen(
     var selectedDownloadsGenre by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingDeleteDownloadTarget by remember { mutableStateOf<LibraryDownloadActionTarget?>(null) }
     var disintegratingDownloadKey by remember { mutableStateOf<String?>(null) }
+    var downloadsSelectionMode by remember { mutableStateOf(false) }
+    var selectedDownloadsEntryIds by remember { mutableStateOf(emptySet<String>()) }
+    var expandedDownloadsShowId by rememberSaveable { mutableStateOf<String?>(null) }
+
+    fun exitDownloadsSelection() {
+        downloadsSelectionMode = false
+        selectedDownloadsEntryIds = emptySet()
+    }
+
+    fun toggleDownloadsSelection(entry: DownloadsListEntry) {
+        selectedDownloadsEntryIds = if (entry.entryId in selectedDownloadsEntryIds) {
+            selectedDownloadsEntryIds - entry.entryId
+        } else {
+            selectedDownloadsEntryIds + entry.entryId
+        }
+        if (selectedDownloadsEntryIds.isEmpty()) downloadsSelectionMode = false
+    }
+
+    fun selectedDownloadsEntries(): List<DownloadsListEntry> {
+        val byKey = downloadsListEntries.associateBy { it.entryId }
+        return selectedDownloadsEntryIds.mapNotNull { byKey[it] }
+    }
+
+    val expandedShowTitleForHeader = remember(expandedDownloadsShowId, downloadsUiState.items) {
+        expandedDownloadsShowId
+            ?.let { showId -> downloadsUiState.completedItems.firstOrNull { it.parentMetaId == showId } }
+            ?.title
+            .orEmpty()
+    }
+
+    var pendingBulkDownloadsDelete by remember { mutableStateOf<List<DownloadsListEntry>?>(null) }
+
+    fun bulkConvertDownloads() {
+        val ids = selectedDownloadsEntries().filterIsInstance<DownloadsListEntry.Download>().map { it.item.id }
+        exitDownloadsSelection()
+        if (ids.isNotEmpty()) onConvertDownloads?.invoke(ids)
+    }
+
+    fun bulkShareDownloads() {
+        selectedDownloadsEntries().filterIsInstance<DownloadsListEntry.Download>().singleOrNull()?.let { entry ->
+            DownloadsRepository.playableLocalFileUri(entry.item)
+                ?.let { uri -> DownloadsPlatformDownloader.shareFile(uri, entry.item.title) }
+        }
+        exitDownloadsSelection()
+    }
+
+    fun bulkCancelConversions() {
+        selectedDownloadsEntries().filterIsInstance<DownloadsListEntry.Conversion>()
+            .filter { it.job.isActive }
+            .forEach { ConverterRepository.cancel(it.job.id) }
+        exitDownloadsSelection()
+    }
     var showReleaseCalendar by rememberSaveable { mutableStateOf(false) }
     val releaseCalendarItemsKey = remember(uiState.items) { libraryCalendarItemsCacheKey(uiState.items) }
     val releaseCalendarFallbackEvents = remember(releaseCalendarItemsKey) {
@@ -267,6 +357,14 @@ fun LibraryScreen(
                     disintegratingDownloadKey = command.target.entryKey
                 }
             }
+        }
+    }
+
+    LaunchedEffect(sourceMode) {
+        if (sourceMode != LibraryViewMode.Downloads) {
+            downloadsSelectionMode = false
+            selectedDownloadsEntryIds = emptySet()
+            expandedDownloadsShowId = null
         }
     }
 
@@ -426,8 +524,11 @@ fun LibraryScreen(
                     androidx.compose.foundation.layout.Column(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
+                        val isDownloadsMode = sourceMode == LibraryViewMode.Downloads
                         NuvioScreenHeader(
-                            title = if (sourceMode == LibraryViewMode.Cloud) {
+                            title = if (expandedDownloadsShowId != null) {
+                                expandedShowTitleForHeader
+                            } else if (sourceMode == LibraryViewMode.Cloud) {
                                 stringResource(Res.string.library_title)
                             } else if (isTraktSource) {
                                 stringResource(Res.string.library_trakt_title)
@@ -435,7 +536,45 @@ fun LibraryScreen(
                                 stringResource(Res.string.library_title)
                             },
                             modifier = Modifier.padding(horizontal = 16.dp),
+                            onBack = when {
+                                expandedDownloadsShowId != null -> ({ expandedDownloadsShowId = null })
+                                downloadsSelectionMode -> ({ exitDownloadsSelection() })
+                                else -> null
+                            },
                             actions = {
+                                if (isDownloadsMode && downloadsSelectionMode) {
+                                    Text(
+                                        text = stringResource(
+                                            Res.string.converter_selection_count,
+                                            selectedDownloadsEntryIds.size,
+                                        ),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            selectedDownloadsEntryIds = if (
+                                                selectedDownloadsEntryIds.size == downloadsSelectableEntryIds.size
+                                            ) {
+                                                emptySet()
+                                            } else {
+                                                downloadsSelectableEntryIds
+                                            }
+                                        },
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.DoneAll,
+                                            contentDescription = stringResource(Res.string.downloads_select_all),
+                                        )
+                                    }
+                                } else if (isDownloadsMode && expandedDownloadsShowId == null) {
+                                    IconButton(onClick = { downloadsSelectionMode = true }) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.DoneAll,
+                                            contentDescription = stringResource(Res.string.converter_action_select),
+                                        )
+                                    }
+                                }
                                 if (sourceMode == LibraryViewMode.Saved) {
                                     val openCalendarLabel = stringResource(Res.string.library_calendar_open)
                                     IconButton(
@@ -453,13 +592,15 @@ fun LibraryScreen(
                                 }
                             },
                         )
-                        LibrarySourceSwitch(
-                            selectedMode = sourceMode,
-                            onModeSelected = { mode ->
-                                sourceModeName = mode.name
-                            },
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                        )
+                        if (expandedDownloadsShowId == null) {
+                            LibrarySourceSwitch(
+                                selectedMode = sourceMode,
+                                onModeSelected = { mode ->
+                                    sourceModeName = mode.name
+                                },
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                        }
                         Spacer(modifier = Modifier.height(6.dp))
                     }
                 }
@@ -495,6 +636,8 @@ fun LibraryScreen(
             } else if (sourceMode == LibraryViewMode.Downloads) {
                 downloadsLibraryContent(
                     uiState = downloadsUiState,
+                    converterUiState = converterUiState,
+                    entries = downloadsListEntries,
                     showHeaderAccent = !homeCatalogSettingsUiState.hideCatalogUnderline,
                     selectedFilter = downloadsFilter,
                     selectedGenre = selectedDownloadsGenre,
@@ -505,11 +648,19 @@ fun LibraryScreen(
                     onGenreSelected = { genre ->
                         selectedDownloadsGenre = genre
                     },
-                    onPosterClick = onPosterClick,
                     onOpenDownload = onOpenDownload,
+                    onShareDownload = { item ->
+                        val uri = DownloadsRepository.playableLocalFileUri(item)
+                        uri?.let { DownloadsPlatformDownloader.shareFile(it, item.title) }
+                    },
+                    expandedShowId = expandedDownloadsShowId,
+                    onExpandShow = { showId -> expandedDownloadsShowId = showId },
                     disintegratingDownloadKey = disintegratingDownloadKey,
                     onDownloadLongClick = { target ->
                         onDownloadLongClick?.invoke(target, PosterZoomAnchorHolder.consume())
+                    },
+                    onConversionLongClick = { target ->
+                        onConversionLongClick?.invoke(target, PosterZoomAnchorHolder.consume())
                     },
                     onDownloadDisintegrated = { target ->
                         if (pendingDeleteDownloadTarget?.entryKey == target.entryKey) {
@@ -521,6 +672,13 @@ fun LibraryScreen(
                         if (disintegratingDownloadKey == target.entryKey) {
                             disintegratingDownloadKey = null
                         }
+                    },
+                    selectionMode = downloadsSelectionMode,
+                    selectedIds = selectedDownloadsEntryIds,
+                    onToggleSelection = ::toggleDownloadsSelection,
+                    onEnterSelection = { entry ->
+                        downloadsSelectionMode = true
+                        selectedDownloadsEntryIds = setOf(entry.entryId)
                     },
                 )
             } else if (!showReleaseCalendar) {
@@ -632,22 +790,156 @@ fun LibraryScreen(
                 onPosterClick = onPosterClick,
             )
         }
+
+        AnimatedVisibility(
+            visible = downloadsSelectionMode && selectedDownloadsEntryIds.isNotEmpty(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            val selected = selectedDownloadsEntries()
+            SelectionActionBar(
+                selectedCount = selectedDownloadsEntryIds.size,
+                canConvert = selected.isNotEmpty() &&
+                    selected.all { it is DownloadsListEntry.Download && it.item.status == DownloadStatus.Completed },
+                canShare = selected.size == 1 &&
+                    selected.first().let { it is DownloadsListEntry.Download && it.item.status == DownloadStatus.Completed },
+                canCancel = selected.any { it is DownloadsListEntry.Conversion && it.job.isActive },
+                canDelete = selected.isNotEmpty(),
+                onConvert = ::bulkConvertDownloads,
+                onShare = ::bulkShareDownloads,
+                onCancel = ::bulkCancelConversions,
+                onDelete = { pendingBulkDownloadsDelete = selectedDownloadsEntries() },
+            )
+        }
+    }
+
+    pendingBulkDownloadsDelete?.let { targets ->
+        NuvioStatusModal(
+            title = stringResource(Res.string.downloads_delete_title),
+            message = stringResource(Res.string.downloads_bulk_delete, targets.size),
+            isVisible = true,
+            confirmText = stringResource(Res.string.action_delete),
+            dismissText = stringResource(Res.string.action_cancel),
+            onConfirm = {
+                targets.forEach { entry ->
+                    when (entry) {
+                        is DownloadsListEntry.Download -> DownloadsRepository.cancelDownload(entry.item.id)
+                        is DownloadsListEntry.Conversion -> if (entry.job.status.isTerminal) {
+                            ConverterRepository.dismiss(entry.job.id)
+                        }
+                    }
+                }
+                pendingBulkDownloadsDelete = null
+                exitDownloadsSelection()
+            },
+            onDismiss = { pendingBulkDownloadsDelete = null },
+        )
     }
 }
 
 private fun LazyListScope.downloadsLibraryContent(
     uiState: DownloadsUiState,
+    converterUiState: ConverterUiState,
+    entries: List<DownloadsListEntry>,
     showHeaderAccent: Boolean,
     selectedFilter: LibraryDownloadsFilter,
     selectedGenre: String?,
     onFilterSelected: (LibraryDownloadsFilter) -> Unit,
     onGenreSelected: (String?) -> Unit,
-    onPosterClick: ((LibraryItem) -> Unit)?,
     onOpenDownload: ((DownloadItem) -> Unit)?,
+    onShareDownload: (DownloadItem) -> Unit,
+    expandedShowId: String?,
+    onExpandShow: (String) -> Unit,
     disintegratingDownloadKey: String?,
     onDownloadLongClick: (LibraryDownloadActionTarget) -> Unit,
+    onConversionLongClick: (LibraryConversionActionTarget) -> Unit,
     onDownloadDisintegrated: (LibraryDownloadActionTarget) -> Unit,
+    selectionMode: Boolean,
+    selectedIds: Set<String>,
+    onToggleSelection: (DownloadsListEntry) -> Unit,
+    onEnterSelection: (DownloadsListEntry) -> Unit,
 ) {
+    if (uiState.items.isEmpty() && converterUiState.jobs.isEmpty()) {
+        item(key = "library-downloads-empty") {
+            LibraryDownloadsEmptyState(
+                onManageClick = null,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 30.dp),
+            )
+        }
+        return
+    }
+
+    if (expandedShowId != null) {
+        downloadsExpandedShowContent(
+            showId = expandedShowId,
+            uiState = uiState,
+            selectionMode = selectionMode,
+            selectedIds = selectedIds,
+            onToggleSelection = onToggleSelection,
+            onEnterSelection = onEnterSelection,
+            onOpenDownload = onOpenDownload,
+            onShareDownload = onShareDownload,
+            onDownloadLongClick = onDownloadLongClick,
+        )
+        return
+    }
+
+    item(key = "library-downloads-storage") {
+        StorageFootprintBar(
+            completedDownloads = uiState.completedItems,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+    }
+    item(key = "library-downloads-lowpower") {
+        LowPowerBanner(
+            isVisible = converterUiState.hasActiveJobs,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+    }
+
+    val queuedJobs = converterUiState.jobs.filter { it.status == ConversionStatus.Queued }
+    val convertingJobs = converterUiState.jobs.filter {
+        it.status == ConversionStatus.Probing || it.status == ConversionStatus.Running
+    }
+    val issueJobs = converterUiState.jobs
+        .filter { it.status == ConversionStatus.Failed || it.status == ConversionStatus.Cancelled }
+        .sortedByDescending { it.updatedAtEpochMs }
+
+    conversionJobShelf(
+        key = "library-conversions-queue",
+        titleRes = Res.string.downloads_queue_title,
+        jobs = queuedJobs,
+        showHeaderAccent = showHeaderAccent,
+        selectionMode = selectionMode,
+        selectedIds = selectedIds,
+        onToggleSelection = onToggleSelection,
+        onEnterSelection = onEnterSelection,
+        onConversionLongClick = onConversionLongClick,
+    )
+    conversionJobShelf(
+        key = "library-conversions-active",
+        titleRes = Res.string.converter_section_title,
+        jobs = convertingJobs,
+        showHeaderAccent = showHeaderAccent,
+        selectionMode = selectionMode,
+        selectedIds = selectedIds,
+        onToggleSelection = onToggleSelection,
+        onEnterSelection = onEnterSelection,
+        onConversionLongClick = onConversionLongClick,
+    )
+    conversionJobShelf(
+        key = "library-conversions-issues",
+        titleRes = Res.string.downloads_history_title,
+        jobs = issueJobs,
+        showHeaderAccent = showHeaderAccent,
+        selectionMode = selectionMode,
+        selectedIds = selectedIds,
+        onToggleSelection = onToggleSelection,
+        onEnterSelection = onEnterSelection,
+        onConversionLongClick = onConversionLongClick,
+    )
+
     val activeItems = uiState.activeItems.sortedByDescending { it.updatedAtEpochMs }
     val completedMovies = uiState.completedItems
         .filterNot(DownloadItem::isEpisode)
@@ -685,16 +977,6 @@ private fun LazyListScope.downloadsLibraryContent(
         }
         .sortedByDescending { it.sortEpochMs }
 
-    if (uiState.items.isEmpty()) {
-        item(key = "library-downloads-empty") {
-            LibraryDownloadsEmptyState(
-                onManageClick = null,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 30.dp),
-            )
-        }
-        return
-    }
-
     if (activeItems.isNotEmpty()) {
         item(key = "library-downloads-active") {
             NuvioShelfSection(
@@ -713,16 +995,24 @@ private fun LazyListScope.downloadsLibraryContent(
                     downloads = listOf(item),
                     libraryItem = item.toDownloadedLibraryItem(),
                 )
+                val entryId = DownloadsListEntry.Download(item).entryId
                 LibraryActiveDownloadCard(
                     item = item,
+                    isSelected = selectionMode && entryId in selectedIds,
                     onClick = {
-                        if (item.isPlayable) {
-                            onOpenDownload?.invoke(item)
+                        when {
+                            selectionMode -> onToggleSelection(DownloadsListEntry.Download(item))
+                            item.isPlayable -> onOpenDownload?.invoke(item)
+                            else -> onDownloadLongClick(target)
+                        }
+                    },
+                    onLongClick = {
+                        if (selectionMode) {
+                            onToggleSelection(DownloadsListEntry.Download(item))
                         } else {
                             onDownloadLongClick(target)
                         }
                     },
-                    onLongClick = { onDownloadLongClick(target) },
                 )
             }
         }
@@ -782,36 +1072,56 @@ private fun LazyListScope.downloadsLibraryContent(
                     },
                     libraryItem = libraryItem,
                 )
+                val downloadsEntry = DownloadsListEntry.Download(representative)
+                val isSelected = selectionMode && downloadsEntry.entryId in selectedIds
+
                 DisintegratingContainer(
                     disintegrating = disintegratingDownloadKey == entry.key,
                     onDisintegrated = { onDownloadDisintegrated(target) },
                 ) {
-                    HomePosterCard(
-                        item = libraryItem.toMetaPreview(),
-                        isWatched = false,
-                        topStartBadge = representative.resolutionBadge(),
-                        onOverflowClick = if (disintegratingDownloadKey == entry.key) {
-                            null
-                        } else {
-                            { onDownloadLongClick(target) }
-                        },
-                        onClick = if (disintegratingDownloadKey == entry.key) {
-                            null
-                        } else {
-                            {
-                                if (onPosterClick != null) {
-                                    onPosterClick(libraryItem)
-                                } else {
-                                    onOpenDownload?.invoke(representative)
+                    Box {
+                        HomePosterCard(
+                            item = libraryItem.toMetaPreview(),
+                            isWatched = false,
+                            topStartBadge = representative.resolutionBadge(),
+                            onClick = if (disintegratingDownloadKey == entry.key) {
+                                null
+                            } else {
+                                {
+                                    when {
+                                        selectionMode -> onToggleSelection(downloadsEntry)
+                                        entry is LibraryDownloadDisplayEntry.Show -> onExpandShow(representative.parentMetaId)
+                                        else -> onOpenDownload?.invoke(representative)
+                                    }
                                 }
-                            }
-                        },
-                        onLongClick = if (disintegratingDownloadKey == entry.key) {
-                            null
-                        } else {
-                            { onDownloadLongClick(target) }
-                        },
-                    )
+                            },
+                            onLongClick = if (disintegratingDownloadKey == entry.key) {
+                                null
+                            } else {
+                                {
+                                    if (selectionMode) {
+                                        onToggleSelection(downloadsEntry)
+                                    } else {
+                                        onDownloadLongClick(target)
+                                    }
+                                }
+                            },
+                        )
+                        if (entry is LibraryDownloadDisplayEntry.Movie) {
+                            DownloadFormatBadge(
+                                item = representative,
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .padding(8.dp),
+                            )
+                        }
+                        DownloadsSelectionBadge(
+                            isVisible = isSelected,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(8.dp),
+                        )
+                    }
                 }
             }
         }
@@ -828,9 +1138,11 @@ private fun LazyListScope.downloadsLibraryContent(
 }
 
 @Composable
-private fun LibraryDownloadsEmptyState(
+internal fun LibraryDownloadsEmptyState(
     onManageClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    title: String = stringResource(Res.string.downloads_empty_title),
+    message: String = stringResource(Res.string.downloads_empty_message),
 ) {
     Column(
         modifier = modifier
@@ -846,14 +1158,14 @@ private fun LibraryDownloadsEmptyState(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                text = stringResource(Res.string.downloads_empty_title),
+                text = title,
                 modifier = Modifier.widthIn(max = 430.dp),
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center,
             )
             Text(
-                text = stringResource(Res.string.downloads_empty_message),
+                text = message,
                 modifier = Modifier.widthIn(max = 430.dp),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -890,7 +1202,7 @@ private fun LibraryDownloadsEmptyState(
 }
 
 @Composable
-private fun LibraryDownloadsEmptyArtwork(
+internal fun LibraryDownloadsEmptyArtwork(
     modifier: Modifier = Modifier,
 ) {
     val primaryColor = MaterialTheme.colorScheme.primary
@@ -945,7 +1257,7 @@ private fun LibraryDownloadsEmptyArtwork(
 }
 
 @Composable
-private fun LibraryDownloadsArtworkCard(
+internal fun LibraryDownloadsArtworkCard(
     modifier: Modifier = Modifier,
     alpha: Float,
 ) {
@@ -1080,12 +1392,490 @@ private fun LibraryDownloadFilterChip(
     }
 }
 
+// --- Selection, format badges, storage/power rows ------------------------------------------
+
+@Composable
+private fun DownloadsSelectionBadge(
+    isVisible: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = isVisible,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = modifier,
+    ) {
+        val tokens = MaterialTheme.nuvio
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(tokens.colors.accent),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Check,
+                contentDescription = null,
+                tint = tokens.colors.onAccent,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
+
+/** Converted-output label, or a probed original-format label for a completed, unconverted file. */
+@Composable
+private fun DownloadFormatBadge(
+    item: DownloadItem,
+    modifier: Modifier = Modifier,
+) {
+    LaunchedEffect(item.id, item.status, item.localFileUri) {
+        if (item.status == DownloadStatus.Completed && !item.isConverted) {
+            DownloadsRepository.playableLocalFileUri(item)
+                ?.let { uri -> DownloadFormatProbeCache.probe(item.id, uri) }
+        }
+    }
+    val probe = if (item.status == DownloadStatus.Completed) DownloadFormatProbeCache.get(item.id) else null
+    val label = item.conversionLabel ?: probe?.originalFormatLabel(item.totalBytes)
+    if (label.isNullOrBlank()) return
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(999.dp),
+        color = Color.Black.copy(alpha = 0.58f),
+        contentColor = Color.White,
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun StorageFootprintBar(
+    completedDownloads: List<DownloadItem>,
+    modifier: Modifier = Modifier,
+) {
+    val usedBytes = remember(completedDownloads) {
+        completedDownloads.sumOf { it.totalBytes ?: it.downloadedBytes }
+    }
+    val freeBytes = remember { DownloadsPlatformDownloader.availableStorageBytes() }
+    val tokens = MaterialTheme.nuvio
+
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = stringResource(
+                Res.string.downloads_storage_summary,
+                formatDownloadBytes(usedBytes),
+                freeBytes?.let(::formatDownloadBytes) ?: "—",
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = tokens.colors.textMuted,
+        )
+        if (freeBytes != null && freeBytes < LIBRARY_LOW_STORAGE_THRESHOLD_BYTES) {
+            Text(
+                text = stringResource(Res.string.downloads_storage_low_warning, formatDownloadBytes(freeBytes)),
+                style = MaterialTheme.typography.bodySmall,
+                color = tokens.colors.warning,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LowPowerBanner(
+    isVisible: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    if (!isVisible) return
+    val active = remember { DownloadsPlatformDownloader.isLowPowerModeActive() }
+    if (!active) return
+    Text(
+        text = stringResource(Res.string.downloads_low_power_warning),
+        modifier = modifier,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.nuvio.colors.warning,
+    )
+}
+
+private const val LIBRARY_LOW_STORAGE_THRESHOLD_BYTES = 1024L * 1024L * 1024L // 1 GiB
+
+// --- Conversion shelves ---------------------------------------------------------------------
+
+private fun LazyListScope.conversionJobShelf(
+    key: String,
+    titleRes: org.jetbrains.compose.resources.StringResource,
+    jobs: List<ConversionJob>,
+    showHeaderAccent: Boolean,
+    selectionMode: Boolean,
+    selectedIds: Set<String>,
+    onToggleSelection: (DownloadsListEntry) -> Unit,
+    onEnterSelection: (DownloadsListEntry) -> Unit,
+    onConversionLongClick: (LibraryConversionActionTarget) -> Unit,
+) {
+    if (jobs.isEmpty()) return
+    item(key = key) {
+        NuvioShelfSection(
+            title = stringResource(titleRes),
+            entries = jobs,
+            headerHorizontalPadding = 16.dp,
+            rowContentPadding = PaddingValues(horizontal = 16.dp),
+            showHeaderAccent = showHeaderAccent,
+            onViewAllClick = null,
+            viewAllPillSize = NuvioViewAllPillSize.Compact,
+            key = { job -> job.id },
+        ) { job ->
+            val entry = DownloadsListEntry.Conversion(job)
+            val isSelected = selectionMode && entry.entryId in selectedIds
+            LibraryConversionCard(
+                job = job,
+                isSelected = isSelected,
+                onClick = {
+                    if (selectionMode) {
+                        onToggleSelection(entry)
+                    } else {
+                        onConversionLongClick(LibraryConversionActionTarget(job))
+                    }
+                },
+                onLongClick = {
+                    if (selectionMode) {
+                        onToggleSelection(entry)
+                    } else {
+                        onConversionLongClick(LibraryConversionActionTarget(job))
+                    }
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun LibraryConversionCard(
+    job: ConversionJob,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val posterCardStyle by remember {
+        PosterCardStyleRepository.ensureLoaded()
+        PosterCardStyleRepository.uiState
+    }.collectAsStateWithLifecycle()
+    val cardShape = RoundedCornerShape(posterCardStyle.cornerRadiusDp.dp)
+    val tone = when (job.status) {
+        ConversionStatus.Queued -> PillTone.Neutral
+        ConversionStatus.Probing, ConversionStatus.Running -> PillTone.Info
+        ConversionStatus.Failed -> PillTone.Danger
+        ConversionStatus.Cancelled -> PillTone.Neutral
+        ConversionStatus.Completed -> PillTone.Success
+    }
+    val statusLabel = stringResource(job.status.labelRes())
+
+    Column(
+        modifier = modifier.width(posterCardStyle.widthDp.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.675f)
+                .clip(cardShape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .posterCardClickable(
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                    zoomImageUrl = job.poster,
+                    zoomCornerRadius = posterCardStyle.cornerRadiusDp.dp,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (!job.poster.isNullOrBlank()) {
+                NuvioAsyncImage(
+                    imageUrl = job.poster,
+                    contentDescription = job.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Text(
+                    text = job.title.take(1).uppercase(),
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            0.58f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = 0.68f),
+                        ),
+                    ),
+            )
+            StatusPill(
+                text = statusLabel,
+                tone = tone,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(9.dp),
+            )
+            DownloadsSelectionBadge(
+                isVisible = isSelected,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(9.dp),
+            )
+        }
+
+        if (job.isActive && !job.hasIndeterminateProgress) {
+            LinearProgressIndicator(
+                progress = { job.progressFraction },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(999.dp)),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+            )
+        }
+
+        if (!posterCardStyle.hideLabelsEnabled) {
+            Column(
+                modifier = Modifier.padding(horizontal = 2.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = job.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = ConverterRepository.conversionLabel(job.spec),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+// --- Expanded show: seasons and episodes ----------------------------------------------------
+
+private fun LazyListScope.downloadsExpandedShowContent(
+    showId: String,
+    uiState: DownloadsUiState,
+    selectionMode: Boolean,
+    selectedIds: Set<String>,
+    onToggleSelection: (DownloadsListEntry) -> Unit,
+    onEnterSelection: (DownloadsListEntry) -> Unit,
+    onOpenDownload: ((DownloadItem) -> Unit)?,
+    onShareDownload: (DownloadItem) -> Unit,
+    onDownloadLongClick: (LibraryDownloadActionTarget) -> Unit,
+) {
+    val episodes = uiState.completedItems
+        .filter { it.isEpisode && it.parentMetaId == showId }
+        .sortedForSeriesDownloads()
+
+    if (episodes.isEmpty()) {
+        item(key = "library-downloads-expanded-empty") {
+            Text(
+                text = stringResource(Res.string.downloads_empty_episodes),
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 30.dp),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
+
+    val seasons = episodes
+        .groupBy { it.seasonNumber ?: 0 }
+        .toList()
+        .sortedWith(
+            compareBy<Pair<Int, List<DownloadItem>>> { (season, _) -> if (season == 0) 0 else 1 }
+                .thenBy { (season, _) -> if (season == 0) 0 else season },
+        )
+
+    seasons.forEach { (seasonNumber, seasonEpisodes) ->
+        item(key = "library-downloads-season-$seasonNumber") {
+            Text(
+                text = if (seasonNumber == 0) {
+                    stringResource(Res.string.episodes_specials)
+                } else {
+                    stringResource(Res.string.episodes_season, seasonNumber)
+                },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        items(seasonEpisodes.sortedForSeriesDownloads(), key = { "library-downloads-ep-${it.id}" }) { item ->
+            val entry = DownloadsListEntry.Download(item)
+            val isSelected = selectionMode && entry.entryId in selectedIds
+            val target = LibraryDownloadActionTarget(
+                entryKey = entry.entryId,
+                primaryDownload = item,
+                downloads = listOf(item),
+                libraryItem = item.toDownloadedLibraryItem(),
+            )
+            DownloadedEpisodeCard(
+                item = item,
+                isSelected = isSelected,
+                onClick = {
+                    when {
+                        selectionMode -> onToggleSelection(entry)
+                        else -> onOpenDownload?.invoke(item)
+                    }
+                },
+                onLongClick = {
+                    if (selectionMode) onToggleSelection(entry) else onDownloadLongClick(target)
+                },
+                onShare = { onShareDownload(item) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
+/**
+ * A downloaded episode row, visually modeled on the details screen's `EpisodeHorizontalCard`
+ * (thumbnail, gradient scrim, episode-code badge, title) but sized from
+ * [PosterCardStyleRepository] like every other card in this screen, rather than that card's own
+ * fixed, screen-width-keyed metrics — so the user's poster-card-style setting still applies here.
+ */
+@Composable
+private fun DownloadedEpisodeCard(
+    item: DownloadItem,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onShare: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val posterCardStyle by remember {
+        PosterCardStyleRepository.ensureLoaded()
+        PosterCardStyleRepository.uiState
+    }.collectAsStateWithLifecycle()
+    val cardShape = RoundedCornerShape(posterCardStyle.cornerRadiusDp.dp)
+    val artwork = item.episodeThumbnail?.takeIf { it.isNotBlank() }
+        ?: item.detailsSnapshot?.poster?.takeIf { it.isNotBlank() }
+        ?: item.poster?.takeIf { it.isNotBlank() }
+
+    Row(
+        modifier = modifier
+            .height(112.dp)
+            .clip(cardShape)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .posterCardClickable(
+                onClick = onClick,
+                onLongClick = onLongClick,
+                zoomImageUrl = artwork,
+                zoomCornerRadius = posterCardStyle.cornerRadiusDp.dp,
+            ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .aspectRatio(16f / 9f),
+        ) {
+            if (artwork != null) {
+                NuvioAsyncImage(
+                    imageUrl = artwork,
+                    contentDescription = item.episodeTitle ?: item.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            0.6f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = 0.55f),
+                        ),
+                    ),
+            )
+            item.seasonNumber?.let { season ->
+                item.episodeNumber?.let { episode ->
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(8.dp),
+                        shape = RoundedCornerShape(999.dp),
+                        color = Color.Black.copy(alpha = 0.58f),
+                        contentColor = Color.White,
+                    ) {
+                        Text(
+                            text = stringResource(Res.string.compose_player_episode_code_full, season, episode),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+            DownloadsSelectionBadge(
+                isVisible = isSelected,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp),
+            )
+        }
+
+        if (!posterCardStyle.hideLabelsEnabled) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = item.episodeTitle?.trim()?.takeIf { it.isNotBlank() } ?: item.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                DownloadFormatBadge(item = item)
+                Spacer(modifier = Modifier.weight(1f))
+            }
+            IconButton(onClick = onShare) {
+                Icon(
+                    imageVector = Icons.Rounded.Share,
+                    contentDescription = stringResource(Res.string.converter_action_share),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun LibraryActiveDownloadCard(
     item: DownloadItem,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
+    isSelected: Boolean = false,
 ) {
     val posterCardStyle by remember {
         PosterCardStyleRepository.ensureLoaded()
@@ -1162,6 +1952,12 @@ private fun LibraryActiveDownloadCard(
                     maxLines = 1,
                 )
             }
+            DownloadsSelectionBadge(
+                isVisible = isSelected,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(9.dp),
+            )
         }
 
         LinearProgressIndicator(
@@ -1222,6 +2018,11 @@ data class LibraryDownloadActionTarget(
 sealed interface LibraryDownloadActionCommand {
     data class Delete(val target: LibraryDownloadActionTarget) : LibraryDownloadActionCommand
 }
+
+/** Drives the same poster-zoom action overlay as [LibraryDownloadActionTarget], for a conversion job. */
+data class LibraryConversionActionTarget(
+    val job: ConversionJob,
+)
 
 private sealed class LibraryDownloadDisplayEntry {
     abstract val key: String

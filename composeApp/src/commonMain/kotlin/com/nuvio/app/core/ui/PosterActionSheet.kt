@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -18,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.Dp
 import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.episodes_cd_downloaded
 import nuvio.composeapp.generated.resources.episodes_cd_watched
 import org.jetbrains.compose.resources.stringResource
 
@@ -69,4 +71,45 @@ fun BoxScope.NuvioPosterWatchedOverlay(
             .align(Alignment.TopEnd)
             .padding(padding),
     )
+}
+
+/**
+ * Same circular-pill treatment as [NuvioWatchedBadge], for the "this episode is already on the
+ * device" case. Kept as its own composable rather than an icon parameter on the watched badge so
+ * the two states can be shown together on the same card without either call site juggling icons.
+ */
+@Composable
+fun NuvioDownloadedBadge(
+    modifier: Modifier = Modifier,
+) {
+    val tokens = MaterialTheme.nuvio
+    Box(
+        modifier = modifier
+            .size(NuvioTokens.Icon.md)
+            .clip(tokens.shapes.avatar)
+            .background(tokens.colors.accent),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.DownloadDone,
+            contentDescription = stringResource(Res.string.episodes_cd_downloaded),
+            tint = tokens.colors.onAccent,
+            modifier = Modifier.size(NuvioTokens.Icon.xs),
+        )
+    }
+}
+
+@Composable
+fun NuvioAnimatedDownloadedBadge(
+    isVisible: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = isVisible,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = modifier,
+    ) {
+        NuvioDownloadedBadge()
+    }
 }

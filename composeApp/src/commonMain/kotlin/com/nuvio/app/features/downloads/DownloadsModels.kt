@@ -71,9 +71,16 @@ data class DownloadItem(
     val mediaInfo: DownloadMediaInfo? = null,
     val createdAtEpochMs: Long,
     val updatedAtEpochMs: Long,
+    /** Set on a copy produced by the video converter; null on an ordinary download. */
+    val convertedFromDownloadId: String? = null,
+    /** Short description of what the conversion produced, e.g. "720p H.264 • MP4". */
+    val conversionLabel: String? = null,
 ) {
     val isEpisode: Boolean
         get() = seasonNumber != null && episodeNumber != null
+
+    val isConverted: Boolean
+        get() = conversionLabel != null
 
     val isPlayable: Boolean
         get() = status == DownloadStatus.Completed && !localFileUri.isNullOrBlank()
