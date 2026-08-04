@@ -1016,7 +1016,16 @@ final class MPVPlayerViewController: UIViewController {
         setStringProperty("cache", "yes")
         setStringProperty("cache-dir", directory)
         setStringProperty("cache-on-disk", "yes")
+        // Without a back-buffer mpv discards data behind the playhead, so seeking backwards
+        // into the band the seek bar draws would go back to the network — which is exactly the
+        // thing the cache is meant to prevent. Sized to match the forward read-ahead.
+        setStringProperty("demuxer-max-bytes", "\(Self.streamCacheBytes)")
+        setStringProperty("demuxer-max-back-bytes", "\(Self.streamCacheBytes)")
     }
+
+    /// Read-ahead and back-buffer each get this much. The on-disk cache spills past it, so this
+    /// bounds memory rather than how much of the file may be cached.
+    private static let streamCacheBytes = 64 * 1024 * 1024
 
     func setSpeed(_ speed: Float) {
         guard mpv != nil else { return }
@@ -1237,7 +1246,10 @@ final class MPVPlayerViewController: UIViewController {
         guard mpv != nil else { return }
         let duration = getDouble("duration")
         let position = getDouble("time-pos")
-        let cached = getDouble("demuxer-cache-time")
+        // demuxer-cache-time is the ABSOLUTE timestamp of the last buffered data, not a
+        // duration ahead of the playhead. Adding position to it double-counts, which drove the
+        // seek bar's buffered band to full within seconds of opening a file.
+        let cachedUntil = getDouble("demuxer-cache-time")
         let speed = getDouble("speed")
         let paused = getFlag("pause")
         let eofReached = getFlag("eof-reached")
@@ -1261,7 +1273,7 @@ final class MPVPlayerViewController: UIViewController {
         isPlayerEnded = eofReached
         durationMs = Int64(duration * 1000)
         positionMs = Int64(max(position, 0) * 1000)
-        bufferedMs = Int64(max(position + cached, 0) * 1000)
+        bufferedMs = Int64(max(cachedUntil, max(position, 0)) * 1000)
         currentSpeed = Float(speed > 0 ? speed : 1.0)
 
         let shouldPublishNowPlayingState = !isPlayerLoading || isPlayerPlaying || durationMs > 0 || positionMs > 0

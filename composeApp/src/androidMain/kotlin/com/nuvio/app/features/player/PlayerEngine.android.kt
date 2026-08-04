@@ -1312,7 +1312,11 @@ private class NuvioLibmpvView(
         )
         val durationMs = stableDurationMs(rawDurationMs, rawPositionMs)
         val positionMs = stablePositionMs(rawPositionMs, durationMs)
-        val cachePositionMs = positionMs + mpv.getPropertyDouble("demuxer-cache-time").toMillis()
+        // demuxer-cache-time is the ABSOLUTE timestamp of the last buffered data, not a
+        // duration ahead of the playhead, so it must not be added to the position — doing so
+        // roughly doubled the value and drove the seek bar's buffered band to full almost
+        // immediately.
+        val cachePositionMs = mpv.getPropertyDouble("demuxer-cache-time").toMillis()
         val isCacheBuffering = cacheBufferingState != null && cacheBufferingState in 0 until 100
         val isLoading = pausedForCache ||
             (!paused && !ended && (seeking || isCacheBuffering || (idle && durationMs <= 0L)))

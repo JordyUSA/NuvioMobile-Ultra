@@ -1074,6 +1074,14 @@ private fun LazyListScope.downloadsLibraryContent(
                 )
                 val downloadsEntry = DownloadsListEntry.Download(representative)
                 val isSelected = selectionMode && downloadsEntry.entryId in selectedIds
+                // A show tile stands for every episode under it, so it may only claim a
+                // resolution they all share — otherwise one 720p episode in an otherwise 1080p
+                // season would be advertised as the whole show's quality, or vice versa.
+                val entryResolutionBadge = when (entry) {
+                    is LibraryDownloadDisplayEntry.Movie -> representative.resolutionBadge()
+                    is LibraryDownloadDisplayEntry.Show ->
+                        entry.group.episodes.map { it.resolutionBadge() }.distinct().singleOrNull()
+                }
 
                 DisintegratingContainer(
                     disintegrating = disintegratingDownloadKey == entry.key,
@@ -1083,7 +1091,7 @@ private fun LazyListScope.downloadsLibraryContent(
                         HomePosterCard(
                             item = libraryItem.toMetaPreview(),
                             isWatched = false,
-                            topStartBadge = representative.resolutionBadge(),
+                            topStartBadge = entryResolutionBadge,
                             onClick = if (disintegratingDownloadKey == entry.key) {
                                 null
                             } else {
@@ -1829,6 +1837,23 @@ private fun DownloadedEpisodeCard(
                             fontWeight = FontWeight.SemiBold,
                         )
                     }
+                }
+            }
+            item.resolutionBadge()?.let { badge ->
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp),
+                    shape = RoundedCornerShape(999.dp),
+                    color = Color.Black.copy(alpha = 0.58f),
+                    contentColor = Color.White,
+                ) {
+                    Text(
+                        text = badge,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
             }
             DownloadsSelectionBadge(

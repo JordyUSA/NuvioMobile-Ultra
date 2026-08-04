@@ -550,6 +550,12 @@
     <string name="settings_advanced_clear_cw_cache">Clear Continue Watching Cache</string>
     <string name="settings_advanced_clear_cw_cache_subtitle">Remove cached Continue Watching data and refresh watch progress</string>
     <string name="settings_advanced_clear_cw_cache_done">Cache cleared</string>
+    <string name="nuvio_enhanced_unavailable_trailer_external">This build opens trailers in an external player, so it cannot preview them inside the hero</string>
+    <string name="nuvio_enhanced_unavailable_showcase_hero">Turn on &quot;Streaming showcase hero design&quot; first</string>
+    <string name="nuvio_enhanced_unavailable_video_preview">Turn on &quot;Hero video preview&quot; first</string>
+    <string name="nuvio_enhanced_unavailable_home_features">Turn on the enhanced Home features first</string>
+    <string name="nuvio_enhanced_unavailable_concierge">Turn on Nuvio Concierge first</string>
+    <string name="nuvio_enhanced_unavailable_quiet_home">Unavailable while Quiet Home mode is on</string>
     <string name="settings_playback_unavailable_external_player">Unavailable while an external player is selected</string>
     <string name="settings_playback_unavailable_external_audio">The external player picks its own audio track</string>
     <string name="settings_playback_unavailable_external_subtitle_forward">Turn on \"Forward subtitles\" to choose subtitle languages for the external player</string>
