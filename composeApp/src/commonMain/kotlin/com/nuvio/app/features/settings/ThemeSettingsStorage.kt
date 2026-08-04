@@ -11,6 +11,8 @@ internal expect object ThemeSettingsStorage {
     fun saveCustomThemeSecondColor(colorName: String)
     fun loadAmoledEnabled(): Boolean?
     fun saveAmoledEnabled(enabled: Boolean)
+    fun loadAutoRotateEnabled(): Boolean?
+    fun saveAutoRotateEnabled(enabled: Boolean)
     fun loadLiquidGlassNativeTabBarEnabled(): Boolean?
     fun saveLiquidGlassNativeTabBarEnabled(enabled: Boolean)
     fun loadLiquidGlassAutoHideOnScrollEnabled(): Boolean?

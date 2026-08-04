@@ -18,6 +18,7 @@ import com.nuvio.app.core.deeplink.handleAppUrl
 import com.nuvio.app.core.network.DnsOverHttpsSettingsStorage
 import com.nuvio.app.core.storage.PlatformLocalAccountDataCleaner
 import com.nuvio.app.core.storage.AppCacheDirectories
+import com.nuvio.app.core.ui.AppOrientationController
 import com.nuvio.app.core.sync.SyncClientIdentityStorage
 import com.nuvio.app.core.ui.AppSystemUiController
 import com.nuvio.app.features.addons.AddonStorage
@@ -108,6 +109,7 @@ class MainActivity : AppCompatActivity() {
         window.setBackgroundDrawableResource(R.color.nuvio_background)
         SyncClientIdentityStorage.initialize(applicationContext)
         AppCacheDirectories.initialize(applicationContext)
+        AppOrientationController.attach(this)
         VideoStreamCache.initialize(applicationContext)
         // Recovers the scratch space a crash or a force-stop left behind, which is the one
         // path where neither the player-exit nor the app-background sweep ever ran.
@@ -202,6 +204,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        AppOrientationController.detach(this)
         EpisodeReleaseNotificationPlatform.unbindActivity(this)
         DownloadsLiveStatusPlatform.unbindActivity(this)
         NuvioEnhancedBackupFileBridge.unbindActivity(this)

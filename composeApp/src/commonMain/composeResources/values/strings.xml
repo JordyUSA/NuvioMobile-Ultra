@@ -1471,6 +1471,8 @@
     <string name="subtitle_language_unknown">Unknown</string>
     <string name="theme_amber">Amber</string>
     <string name="theme_crimson">Crimson</string>
+    <string name="settings_appearance_auto_rotate">Auto-Rotate</string>
+    <string name="settings_appearance_auto_rotate_description">Let Home and the rest of the app follow the device orientation. The player always uses landscape.</string>
     <string name="theme_slate">Slate</string>
     <string name="theme_mocha">Mocha</string>
     <string name="theme_cosmos">Cosmos</string>

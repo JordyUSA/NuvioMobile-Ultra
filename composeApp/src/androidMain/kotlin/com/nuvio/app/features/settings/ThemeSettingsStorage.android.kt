@@ -19,6 +19,7 @@ actual object ThemeSettingsStorage {
     private const val customThemeFirstColorKey = "custom_theme_first_color"
     private const val customThemeSecondColorKey = "custom_theme_second_color"
     private const val amoledEnabledKey = "amoled_enabled"
+    private const val autoRotateEnabledKey = "auto_rotate_enabled"
     private const val liquidGlassNativeTabBarEnabledKey = "liquid_glass_native_tab_bar_enabled"
     private const val liquidGlassAutoHideOnScrollEnabledKey = "liquid_glass_auto_hide_on_scroll_enabled"
     private const val selectedAppLanguageKey = "selected_app_language"
@@ -28,6 +29,7 @@ actual object ThemeSettingsStorage {
         customThemeFirstColorKey,
         customThemeSecondColorKey,
         amoledEnabledKey,
+        autoRotateEnabledKey,
         liquidGlassNativeTabBarEnabledKey,
         liquidGlassAutoHideOnScrollEnabledKey,
         NAV_BAR_STYLE_KEY,
@@ -74,6 +76,19 @@ actual object ThemeSettingsStorage {
         preferences
             ?.edit()
             ?.putBoolean(ProfileScopedKey.of(amoledEnabledKey), enabled)
+            ?.apply()
+    }
+
+    actual fun loadAutoRotateEnabled(): Boolean? =
+        preferences?.let { sharedPreferences ->
+            val key = ProfileScopedKey.of(autoRotateEnabledKey)
+            if (sharedPreferences.contains(key)) sharedPreferences.getBoolean(key, true) else null
+        }
+
+    actual fun saveAutoRotateEnabled(enabled: Boolean) {
+        preferences
+            ?.edit()
+            ?.putBoolean(ProfileScopedKey.of(autoRotateEnabledKey), enabled)
             ?.apply()
     }
 
@@ -143,6 +158,7 @@ actual object ThemeSettingsStorage {
         loadCustomThemeFirstColor()?.let { put(customThemeFirstColorKey, encodeSyncString(it)) }
         loadCustomThemeSecondColor()?.let { put(customThemeSecondColorKey, encodeSyncString(it)) }
         loadAmoledEnabled()?.let { put(amoledEnabledKey, encodeSyncBoolean(it)) }
+        loadAutoRotateEnabled()?.let { put(autoRotateEnabledKey, encodeSyncBoolean(it)) }
         loadLiquidGlassNativeTabBarEnabled()?.let { put(liquidGlassNativeTabBarEnabledKey, encodeSyncBoolean(it)) }
         loadLiquidGlassAutoHideOnScrollEnabled()?.let { put(liquidGlassAutoHideOnScrollEnabledKey, encodeSyncBoolean(it)) }
         loadNavBarStyle()?.let { put(NAV_BAR_STYLE_KEY, encodeSyncString(it)) }
@@ -157,6 +173,7 @@ actual object ThemeSettingsStorage {
         payload.decodeSyncString(customThemeFirstColorKey)?.let(::saveCustomThemeFirstColor)
         payload.decodeSyncString(customThemeSecondColorKey)?.let(::saveCustomThemeSecondColor)
         payload.decodeSyncBoolean(amoledEnabledKey)?.let(::saveAmoledEnabled)
+        payload.decodeSyncBoolean(autoRotateEnabledKey)?.let(::saveAutoRotateEnabled)
         payload.decodeSyncBoolean(liquidGlassNativeTabBarEnabledKey)?.let(::saveLiquidGlassNativeTabBarEnabled)
         payload.decodeSyncBoolean(liquidGlassAutoHideOnScrollEnabledKey)?.let(::saveLiquidGlassAutoHideOnScrollEnabled)
         payload.decodeSyncString(NAV_BAR_STYLE_KEY)?.let(::saveNavBarStyle)
