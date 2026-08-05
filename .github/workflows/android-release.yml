@@ -141,12 +141,14 @@ jobs:
           sed -i -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
           printf '\nNUVIO_RELEASE_STORE_FILE=%s\n' "${keystore_path}" >> local.properties
 
+          # Trakt is not required here: TraktAuthRepository.hasRequiredCredentials() and
+          # TraktPublicListSourceResolver already treat a blank client id/secret as "not
+          # configured" and fail the Trakt feature gracefully rather than the build, so it stays
+          # optional in local.properties instead of blocking every release.
           required_properties=(
             NUVIO_RELEASE_STORE_PASSWORD
             NUVIO_RELEASE_KEY_ALIAS
             NUVIO_RELEASE_KEY_PASSWORD
-            TRAKT_CLIENT_ID
-            TRAKT_CLIENT_SECRET
           )
           for property_name in "${required_properties[@]}"; do
             if ! grep -Eq "^${property_name}=.+" local.properties; then
