@@ -58,15 +58,40 @@ actual object CastPlatform {
     private val _playback = MutableStateFlow<CastPlaybackState?>(null)
     actual val playback: StateFlow<CastPlaybackState?> = _playback.asStateFlow()
 
+    private val _discovery = MutableStateFlow(CastDiscoveryState())
+    actual val discovery: StateFlow<CastDiscoveryState> = _discovery.asStateFlow()
+
     /** Completion for the in-flight [load], resolved by Swift through [onLoadResult]. */
     private var pendingLoad: ((Result<Unit>) -> Unit)? = null
 
     actual fun startDiscovery() {
-        bridge?.startDiscovery()
+        val target = bridge
+        if (target == null) {
+            _discovery.value = CastDiscoveryState(unavailableReason = "The Cast SDK did not start")
+            return
+        }
+        _discovery.value = CastDiscoveryState(isScanning = true)
+        target.startDiscovery()
     }
 
     actual fun stopDiscovery() {
+        _discovery.value = _discovery.value.copy(isScanning = false)
         bridge?.stopDiscovery()
+    }
+
+    /**
+     * `GCKDiscoveryManager` scans continuously rather than in bounded rounds the way Android's
+     * MediaRouter does, so a refresh is a genuine restart of the scan rather than a re-arm.
+     */
+    actual fun refresh() {
+        val target = bridge
+        if (target == null) {
+            _discovery.value = CastDiscoveryState(unavailableReason = "The Cast SDK did not start")
+            return
+        }
+        target.stopDiscovery()
+        _discovery.value = _discovery.value.copy(isScanning = true, unavailableReason = null)
+        target.startDiscovery()
     }
 
     actual fun connect(device: CastDevice) {

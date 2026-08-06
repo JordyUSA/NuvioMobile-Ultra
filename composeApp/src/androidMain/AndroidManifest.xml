@@ -5,6 +5,14 @@
          to advertise the Wi-Fi address rather than loopback. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!--
+        API 33+ gates Wi-Fi device discovery on this. Without it the mDNS scan runs and finds
+        nothing, which looks exactly like having no Chromecast on the network. neverForLocation
+        because the receiver list is all this is used for — no location is derived from it.
+    -->
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
 
     <application>
         <!-- Required by the Cast SDK: CastContext.getSharedInstance() resolves this provider

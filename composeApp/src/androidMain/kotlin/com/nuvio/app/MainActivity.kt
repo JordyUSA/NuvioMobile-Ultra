@@ -117,6 +117,7 @@ class MainActivity : AppCompatActivity() {
         // Cast initialisation is soft: on a device without Play services it leaves
         // CastPlatform.isSupported false and the UI omits the Cast button.
         CastPlatform.initialize(applicationContext)
+        CastPlatform.bindActivity(this)
         CastDelivery.initialize(applicationContext)
         DlnaPlatform.initialize(applicationContext)
         AddonStorage.initialize(applicationContext)
@@ -205,6 +206,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         AppOrientationController.detach(this)
+        CastPlatform.unbindActivity(this)
         EpisodeReleaseNotificationPlatform.unbindActivity(this)
         DownloadsLiveStatusPlatform.unbindActivity(this)
         NuvioEnhancedBackupFileBridge.unbindActivity(this)
@@ -233,6 +235,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (DownloadsLiveStatusPlatform.handlePermissionRequestResult(requestCode)) {
+            return
+        }
+        if (CastPlatform.handlePermissionRequestResult(requestCode, grantResults)) {
             return
         }
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)

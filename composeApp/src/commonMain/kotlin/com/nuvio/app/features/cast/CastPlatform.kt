@@ -10,6 +10,28 @@ data class CastDevice(
     val hasVideoOutput: Boolean,
 )
 
+/**
+ * What receiver discovery is currently doing.
+ *
+ * An empty device list on its own is ambiguous — it looks identical whether nothing has answered
+ * yet, nothing is there, the Cast SDK never started, or the scan quietly went idle. The picker
+ * needs to tell those apart, so discovery reports itself rather than only its results.
+ */
+data class CastDiscoveryState(
+    /**
+     * True while receivers are actually being scanned for.
+     *
+     * Not simply "the picker is open": Android's MediaRouter caps one active scan at 30 seconds
+     * and then reverts to passive, so staying scanning means re-arming, and this flag follows
+     * what discovery is really doing rather than what was last asked of it.
+     */
+    val isScanning: Boolean = false,
+    /** Non-null when Chromecast cannot work on this device at all, with a reason worth showing. */
+    val unavailableReason: String? = null,
+    /** Advice for when scanning keeps coming back empty — a denied permission, for instance. */
+    val hint: String? = null,
+)
+
 sealed interface CastConnectionState {
     /** Discovery is off, or no receiver has answered yet. */
     data object Idle : CastConnectionState
@@ -68,10 +90,19 @@ expect object CastPlatform {
     val connection: StateFlow<CastConnectionState>
     val playback: StateFlow<CastPlaybackState?>
 
+    /** Progress and health of discovery itself, for a picker that would otherwise show a dead list. */
+    val discovery: StateFlow<CastDiscoveryState>
+
     /** Begins listening for receivers. Cheap to call repeatedly. */
     fun startDiscovery()
 
     fun stopDiscovery()
+
+    /**
+     * Starts a fresh scan round immediately, without waiting for the next automatic one, and
+     * retries any initialisation that previously failed. Safe to call when discovery is off.
+     */
+    fun refresh()
 
     fun connect(device: CastDevice)
 

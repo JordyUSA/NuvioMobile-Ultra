@@ -3,9 +3,14 @@ package com.nuvio.app.features.cast.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -25,6 +30,7 @@ import com.nuvio.app.features.cast.CastDelivery
 import com.nuvio.app.features.cast.CastDeliveryMode
 import com.nuvio.app.features.cast.CastDeliveryStatus
 import com.nuvio.app.features.cast.CastDevice
+import com.nuvio.app.features.cast.CastDiscoveryState
 import com.nuvio.app.features.cast.CastIncompatibility
 import com.nuvio.app.features.cast.CastPlatform
 import com.nuvio.app.features.cast.CastStreamRequest
@@ -34,6 +40,7 @@ import com.nuvio.app.features.cast.selectedCastTransport
 import com.nuvio.app.features.cast.dlna.DlnaConnectionState
 import com.nuvio.app.features.cast.dlna.DlnaDevice
 import com.nuvio.app.features.cast.dlna.DlnaPlatform
+import kotlinx.coroutines.delay
 
 /**
  * Whether the Cast affordance should be shown at all.
@@ -91,6 +98,7 @@ fun CastDevicePickerDialog(
 
     val castConnection by CastPlatform.connection.collectAsState()
     val dlnaConnection by DlnaPlatform.connection.collectAsState()
+    val castDiscovery by CastPlatform.discovery.collectAsState()
 
     DisposableEffect(Unit) {
         CastPlatform.startDiscovery()
@@ -114,7 +122,7 @@ fun CastDevicePickerDialog(
             Column {
                 when {
                     connecting -> Text("Connecting…")
-                    receivers.isEmpty() -> Text("Looking for devices on your Wi‑Fi…")
+                    receivers.isEmpty() -> EmptyReceiverList(castDiscovery)
                     else -> receivers.forEach { receiver ->
                         Row(
                             modifier = Modifier
@@ -150,6 +158,14 @@ fun CastDevicePickerDialog(
                         }
                     }
                 }
+                // Shown alongside a populated list too: a Chromecast that never came up is worth
+                // saying out loud even when DLNA renderers did answer, otherwise its absence
+                // reads as "there is no Chromecast here".
+                if (receivers.isNotEmpty() && !connecting) {
+                    castDiscovery.unavailableReason?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 failureMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         },
@@ -165,8 +181,72 @@ fun CastDevicePickerDialog(
                 TextButton(onClick = onDismiss) { Text("Close") }
             }
         },
+        dismissButton = {
+            // Also the retry for a Cast SDK that failed to start, so it stays enabled when
+            // discovery reports itself unavailable.
+            TextButton(onClick = { CastPlatform.refresh() }) { Text("Rescan") }
+        },
     )
 }
+
+/**
+ * Stands in for the device list while nothing has answered.
+ *
+ * A bare "Looking for devices…" is indistinguishable from a scan that has silently stopped, which
+ * is exactly what a lapsed active scan used to look like. The spinner is tied to discovery's own
+ * scanning flag rather than being decorative, so it goes away when scanning genuinely has, and the
+ * network advice is held back until a scan has been running long enough that an empty network is a
+ * likelier explanation than a slow one.
+ */
+@Composable
+private fun EmptyReceiverList(discovery: CastDiscoveryState) {
+    var searchedLongEnough by remember { mutableStateOf(false) }
+    LaunchedEffect(discovery.isScanning) {
+        searchedLongEnough = false
+        if (discovery.isScanning) {
+            delay(ADVICE_DELAY_MS)
+            searchedLongEnough = true
+        }
+    }
+
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (discovery.isScanning) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.width(12.dp))
+            }
+            Text(
+                if (discovery.isScanning) "Looking for devices on your Wi‑Fi…" else "No devices found.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        discovery.unavailableReason?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall)
+        }
+        discovery.hint?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall)
+        }
+        if (searchedLongEnough) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Still nothing. Check that your phone and TV are on the same Wi‑Fi network, and " +
+                    "that the router does not have AP isolation or client isolation turned on.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+/**
+ * Comfortably past two of Android's 30-second active-scan windows, so a receiver that simply
+ * answers slowly has had every chance before the dialog starts blaming the network.
+ */
+private const val ADVICE_DELAY_MS = 45_000L
 
 /**
  * Starts casting [request] as soon as a session is established on either transport, and reports
