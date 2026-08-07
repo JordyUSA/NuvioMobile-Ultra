@@ -30,6 +30,10 @@ final class CastBridge: NSObject, CastIosBridge {
     private var probeBrowser: NWBrowser?
     private var lastProbeDrivenRestart = Date.distantPast
 
+    /// Logged again at every startDiscovery so it sits next to the interesting window in the
+    /// diagnostics ring buffer instead of being pushed out by the SDK's verbose stream.
+    private var environmentSummary = ""
+
     /// Devices are addressed by `deviceID` across the bridge, so the SDK objects stay here.
     private var knownDevices: [String: GCKDevice] = [:]
 
@@ -66,16 +70,22 @@ final class CastBridge: NSObject, CastIosBridge {
 
         // Google's documented debugging path: without this delegate the SDK's discovery
         // failures — permission refusals, socket errors, dead browses — are discarded, and an
-        // empty device list is indistinguishable from a healthy empty network. NSLog puts
-        // them in the system log, so a device attached to Console.app shows the reason.
+        // empty device list is indistinguishable from a healthy empty network. Verbose, on
+        // purpose: every line also lands in CastDiagnostics, the in-app console the user can
+        // copy out of the device picker, because a sideloaded install has no Console.app.
         let logFilter = GCKLoggerFilter()
-        logFilter.minimumLevel = .debug
+        logFilter.minimumLevel = .verbose
         GCKLogger.sharedInstance().filter = logFilter
         GCKLogger.sharedInstance().delegate = bridge
 
         GCKCastContext.sharedInstance().sessionManager.add(bridge)
         bridge.discoveryManager.add(bridge)
         CastBridgeRegistrationKt.registerCastBridge(bridge: bridge)
+
+        bridge.environmentSummary =
+            "SDK \(kGCKFrameworkVersion) · iOS \(UIDevice.current.systemVersion) · " +
+            (Bundle.main.bundleIdentifier ?? "unknown bundle")
+        CastDiagnostics.shared.log(tag: "Cast", message: "installed — \(bridge.environmentSummary)")
         return bridge
     }
 
@@ -85,6 +95,7 @@ final class CastBridge: NSObject, CastIosBridge {
         onMain {
             guard !self.isDiscovering else { return }
             self.isDiscovering = true
+            CastDiagnostics.shared.log(tag: "Cast", message: "startDiscovery — \(self.environmentSummary)")
             // The first browse ever is what triggers iOS's Local Network permission alert,
             // and that browse is already dead by the time the user taps Allow — it never
             // recovers on its own, so a first open of the picker finds nothing even after
@@ -97,6 +108,7 @@ final class CastBridge: NSObject, CastIosBridge {
                 queue: .main
             ) { [weak self] _ in
                 guard let self, self.isDiscovering else { return }
+                CastDiagnostics.shared.log(tag: "Cast", message: "app became active while discovering — restarting SDK browse")
                 self.discoveryManager.stopDiscovery()
                 self.discoveryManager.startDiscovery()
             }
@@ -110,6 +122,7 @@ final class CastBridge: NSObject, CastIosBridge {
         onMain {
             guard self.isDiscovering else { return }
             self.isDiscovering = false
+            CastDiagnostics.shared.log(tag: "Cast", message: "stopDiscovery")
             if let observer = self.discoveryObserver {
                 NotificationCenter.default.removeObserver(observer)
                 self.discoveryObserver = nil
@@ -127,6 +140,7 @@ final class CastBridge: NSObject, CastIosBridge {
         )
         browser.stateUpdateHandler = { [weak self] state in
             guard let self, self.isDiscovering else { return }
+            CastDiagnostics.shared.log(tag: "Probe", message: "NWBrowser state: \(state)")
             // `waiting` while browsing the local network means iOS refused the browse —
             // in practice the Local Network permission — and it will sit there forever
             // rather than fail. That is the only programmatic view of the denial Apple
@@ -137,6 +151,14 @@ final class CastBridge: NSObject, CastIosBridge {
         }
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             guard let self, self.isDiscovering else { return }
+            let names = results.compactMap { result -> String? in
+                if case .service(let name, _, _, _) = result.endpoint { return name }
+                return nil
+            }
+            CastDiagnostics.shared.log(
+                tag: "Probe",
+                message: "mDNS sees \(results.count) receiver(s): \(names.joined(separator: ", "))"
+            )
             CastPlatform.shared.onDiscoveryProbe(
                 blocked: false,
                 mdnsDeviceCount: Int32(results.count)
@@ -147,6 +169,7 @@ final class CastBridge: NSObject, CastIosBridge {
             if !results.isEmpty, self.discoveryManager.deviceCount == 0,
                Date().timeIntervalSince(self.lastProbeDrivenRestart) > 5 {
                 self.lastProbeDrivenRestart = Date()
+                CastDiagnostics.shared.log(tag: "Probe", message: "OS sees receivers but SDK list is empty — cycling SDK browse")
                 self.discoveryManager.stopDiscovery()
                 self.discoveryManager.startDiscovery()
             }
@@ -162,7 +185,11 @@ final class CastBridge: NSObject, CastIosBridge {
 
     func connect(deviceId: String) {
         onMain {
-            guard let device = self.knownDevices[deviceId] else { return }
+            guard let device = self.knownDevices[deviceId] else {
+                CastDiagnostics.shared.log(tag: "Cast", message: "connect: unknown device id \(deviceId)")
+                return
+            }
+            CastDiagnostics.shared.log(tag: "Cast", message: "connect → \(device.friendlyName ?? deviceId)")
             self.sessionManager.startSession(with: device)
         }
     }
@@ -250,6 +277,10 @@ final class CastBridge: NSObject, CastIosBridge {
                 )
             )
         }
+        CastDiagnostics.shared.log(
+            tag: "Cast",
+            message: "SDK device list: \(devices.count) — \(devices.map { $0.name }.joined(separator: ", "))"
+        )
         CastPlatform.shared.onDevicesChanged(devices: devices)
     }
 
@@ -310,6 +341,10 @@ extension CastBridge: GCKSessionManagerListener {
 
     func sessionManager(_ manager: GCKSessionManager, didEnd session: GCKCastSession, withError error: Error?) {
         session.remoteMediaClient?.remove(self)
+        CastDiagnostics.shared.log(
+            tag: "Cast",
+            message: "session ended" + (error.map { ": \($0.localizedDescription)" } ?? "")
+        )
         CastPlatform.shared.onConnectionChanged(state: 0, device: nil, message: nil)
     }
 
@@ -318,6 +353,7 @@ extension CastBridge: GCKSessionManagerListener {
         didFailToStart session: GCKCastSession,
         withError error: Error
     ) {
+        CastDiagnostics.shared.log(tag: "Cast", message: "session failed to start: \(error.localizedDescription)")
         CastPlatform.shared.onConnectionChanged(
             state: 3, device: nil, message: error.localizedDescription
         )
@@ -325,6 +361,7 @@ extension CastBridge: GCKSessionManagerListener {
 
     private func attach(_ session: GCKCastSession) {
         session.remoteMediaClient?.add(self)
+        CastDiagnostics.shared.log(tag: "Cast", message: "session connected: \(session.device.friendlyName ?? "?")")
         CastPlatform.shared.onConnectionChanged(state: 2, device: describe(session), message: nil)
         publishPlayback()
     }
@@ -343,6 +380,8 @@ extension CastBridge: GCKRemoteMediaClientListener {
 extension CastBridge: GCKLoggerDelegate {
     func logMessage(_ message: String, at level: GCKLoggerLevel, fromFunction function: String, location: String) {
         NSLog("[GCKCast] %@ %@", function, message)
+        // The SDK logs from arbitrary threads; the diagnostics buffer is main-thread-only.
+        onMain { CastDiagnostics.shared.log(tag: "GCK", message: "\(function): \(message)") }
     }
 }
 
@@ -351,10 +390,12 @@ extension CastBridge: GCKLoggerDelegate {
 extension CastBridge: GCKRequestDelegate {
 
     func requestDidComplete(_ request: GCKRequest) {
+        CastDiagnostics.shared.log(tag: "Cast", message: "load request completed")
         CastPlatform.shared.onLoadResult(success: true, message: nil)
     }
 
     func request(_ request: GCKRequest, didFailWithError error: GCKError) {
+        CastDiagnostics.shared.log(tag: "Cast", message: "load request failed: \(error.localizedDescription)")
         CastPlatform.shared.onLoadResult(success: false, message: error.localizedDescription)
     }
 

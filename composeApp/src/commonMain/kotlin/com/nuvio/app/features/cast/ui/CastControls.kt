@@ -6,7 +6,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -21,12 +25,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.nuvio.app.features.cast.CastConnectionState
 import com.nuvio.app.features.cast.CastDelivery
 import com.nuvio.app.features.cast.CastDeliveryMode
 import com.nuvio.app.features.cast.CastDeliveryStatus
 import com.nuvio.app.features.cast.CastDevice
+import com.nuvio.app.features.cast.CastDiagnostics
 import com.nuvio.app.features.cast.CastIncompatibility
 import com.nuvio.app.features.cast.CastPlatform
 import com.nuvio.app.features.cast.CastStreamRequest
@@ -95,6 +103,7 @@ fun CastDevicePickerDialog(
     val castConnection by CastPlatform.connection.collectAsState()
     val dlnaConnection by DlnaPlatform.connection.collectAsState()
     val discoveryDiagnostic by CastPlatform.discoveryDiagnostic.collectAsState()
+    var showDiagnostics by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         CastPlatform.startDiscovery()
@@ -205,6 +214,63 @@ fun CastDevicePickerDialog(
                     onDismiss()
                 }) { Text("Stop casting") }
             } else {
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { showDiagnostics = true }) { Text("Diagnostics") }
+        },
+    )
+
+    // Stacked over the picker rather than replacing it, so discovery keeps running — the log
+    // is at its most useful while the scan it describes is still happening.
+    if (showDiagnostics) {
+        CastDiagnosticsDialog(onDismiss = { showDiagnostics = false })
+    }
+}
+
+/**
+ * The cast debug console: everything the discovery stack logged — Cast SDK verbose output, the
+ * NWBrowser probe, SSDP search cycles — with one-tap copy, so a user on a sideloaded build can
+ * paste the evidence instead of describing symptoms.
+ */
+@Composable
+fun CastDiagnosticsDialog(onDismiss: () -> Unit) {
+    val lines by CastDiagnostics.lines.collectAsState()
+    val clipboard = LocalClipboardManager.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Cast diagnostics") },
+        text = {
+            val scroll = rememberScrollState()
+            // Keep the newest lines in view as they arrive.
+            LaunchedEffect(lines.size) { scroll.scrollTo(scroll.maxValue) }
+            SelectionContainer {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 400.dp)
+                        .verticalScroll(scroll),
+                ) {
+                    Text(
+                        if (lines.isEmpty()) {
+                            "Nothing logged yet — leave this open while the picker searches."
+                        } else {
+                            lines.joinToString("\n")
+                        },
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                clipboard.setText(AnnotatedString(CastDiagnostics.dump()))
+            }) { Text("Copy") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { CastDiagnostics.clear() }) { Text("Clear") }
                 TextButton(onClick = onDismiss) { Text("Close") }
             }
         },

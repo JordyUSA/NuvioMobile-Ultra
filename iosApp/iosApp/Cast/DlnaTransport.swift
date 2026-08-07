@@ -42,6 +42,10 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
     private let notifyQueue = DispatchQueue(label: "dlna-notify", qos: .utility)
     private var searchWorkItem: DispatchWorkItem?
 
+    /// The NOTIFY listener retries its socket every five seconds for as long as discovery
+    /// runs; without this flag the diagnostics log would fill with the same failure.
+    private var notifyFailureLogged = false
+
     /// Read from both queues — the active search runs on `queue`, the NOTIFY listener on
     /// `notifyQueue` — so it is guarded rather than left as a plain `Bool`.
     private let stateLock = NSLock()
@@ -72,6 +76,8 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
         queue.async {
             guard !self.discoveryActive else { return }
             self.discoveryActive = true
+            self.notifyFailureLogged = false
+            self.dlog("startDiscovery")
             self.scheduleSearch()
             // Started only once the flag is set, or the listener's `while discoveryActive`
             // would see false and exit immediately. Passive listening runs alongside the active
@@ -86,6 +92,7 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
             self.discoveryActive = false
             self.searchWorkItem?.cancel()
             self.searchWorkItem = nil
+            self.dlog("stopDiscovery")
         }
     }
 
@@ -109,7 +116,10 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
     }
 
     private func performSearch() {
-        guard let socketFd = openSearchSocket() else { return }
+        guard let socketFd = openSearchSocket() else {
+            dlog("could not open search socket (errno=\(errno))")
+            return
+        }
         defer { close(socketFd) }
 
         var destination = sockaddr_in()
@@ -121,6 +131,7 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
         // hides a device for a whole search interval. Repeating each target is what the spec
         // expects of a control point and is the biggest factor in whether a TV turns up at all.
         var multicastSendSucceeded = false
+        var lastSendErrno: Int32 = 0
         for attempt in 0..<Self.searchAttempts {
             for target in Self.searchTargets {
                 let request = "M-SEARCH * HTTP/1.1\r\n" +
@@ -135,7 +146,7 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
                         sendto(socketFd, requestBytes, requestBytes.count, 0, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
                     }
                 }
-                if sent >= 0 { multicastSendSucceeded = true }
+                if sent >= 0 { multicastSendSucceeded = true } else { lastSendErrno = errno }
             }
             if attempt < Self.searchAttempts - 1 {
                 Thread.sleep(forTimeInterval: Self.searchAttemptGapSeconds)
@@ -148,16 +159,25 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
         // M-SEARCH needs no entitlement, only the same Local Network permission Chromecast
         // discovery already prompts for, so sweep the Wi-Fi subnet instead. Responses arrive
         // on this same socket either way, so the receive window below serves both paths.
-        if !multicastSendSucceeded {
+        if multicastSendSucceeded {
+            dlog("multicast M-SEARCH sent")
+        } else {
+            dlog("multicast refused (errno=\(lastSendErrno) \(String(cString: strerror(lastSendErrno)))) — falling back to unicast sweep")
             sweepSubnetWithUnicastSearch(socketFd: socketFd)
         }
 
         let deadline = Date().addingTimeInterval(Self.searchWindowSeconds)
         var buffer = [UInt8](repeating: 0, count: 8192)
+        var responsesReceived = 0
         while Date() < deadline && discoveryActive {
             let received = recv(socketFd, &buffer, buffer.count, 0)
             if received > 0 {
                 if let text = String(bytes: buffer[0..<received], encoding: .utf8) {
+                    responsesReceived += 1
+                    let lines = text.split(separator: "\r\n")
+                    let firstLine = lines.first.map(String.init) ?? ""
+                    let location = lines.first { $0.uppercased().hasPrefix("LOCATION") }.map(String.init) ?? "no LOCATION"
+                    dlog("response: \(firstLine) · \(location)")
                     onMain { DlnaPlatform.shared.onSsdpResponse(raw: text) }
                 }
                 continue
@@ -169,6 +189,7 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
             // devices. Anything that isn't a timeout is a real error and does end the loop.
             if received < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR { break }
         }
+        dlog("search cycle done: \(responsesReceived) response datagram(s)")
         onMain { DlnaPlatform.shared.onSearchCycleCompleted() }
     }
 
@@ -178,17 +199,24 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
     /// window. Not every renderer implements it, which is why this is the fallback and not the
     /// primary path, but for the common home /24 it reliably finds the mainstream TVs.
     private func sweepSubnetWithUnicastSearch(socketFd: Int32) {
-        guard let interface = wifiIPv4() else { return }
+        guard let interface = wifiIPv4() else {
+            dlog("no usable Wi-Fi interface — cannot sweep")
+            return
+        }
         let local = interface.address
         var first = (local & interface.netmask) + 1
         var last = (local | ~interface.netmask) - 1
-        guard first <= last else { return }
+        guard first <= last else {
+            dlog("subnet too small to sweep (mask leaves no other hosts)")
+            return
+        }
         // A corporate-sized mask would mean tens of thousands of datagrams. Past a /22, stay
         // inside the /24 around this phone — where a home television will be anyway.
         if last - first >= 1024 {
             first = (local & 0xFFFF_FF00) + 1
             last = first + 253
         }
+        dlog("unicast sweep \(dottedString(first))–\(dottedString(last)) (\(last - first + 1) hosts) from \(dottedString(local))")
 
         var destination = sockaddr_in()
         destination.sin_family = sa_family_t(AF_INET)
@@ -198,7 +226,7 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
         for host in first...last where host != local {
             guard discoveryActive else { return }
             destination.sin_addr.s_addr = in_addr_t(host.bigEndian)
-            let dotted = "\((host >> 24) & 255).\((host >> 16) & 255).\((host >> 8) & 255).\(host & 255)"
+            let dotted = dottedString(host)
             for target in Self.searchTargets {
                 let request = "M-SEARCH * HTTP/1.1\r\n" +
                     "HOST: \(dotted):\(Self.multicastPort)\r\n" +
@@ -290,6 +318,10 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
     private func listenForNotifications() {
         while discoveryActive {
             guard let socketFd = openNotifySocket() else {
+                if !notifyFailureLogged {
+                    notifyFailureLogged = true
+                    dlog("NOTIFY listener can't bind/join (errno=\(errno) \(String(cString: strerror(errno)))) — passive discovery off; expected without the multicast entitlement")
+                }
                 // Rebind after a failure rather than silently giving up on passive discovery
                 // for the rest of the session.
                 Thread.sleep(forTimeInterval: 5)
@@ -308,6 +340,14 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
             }
             close(socketFd)
         }
+    }
+
+    private func dottedString(_ address: UInt32) -> String {
+        "\((address >> 24) & 255).\((address >> 16) & 255).\((address >> 8) & 255).\(address & 255)"
+    }
+
+    private func dlog(_ message: String) {
+        onMain { CastDiagnostics.shared.log(tag: "DLNA", message: message) }
     }
 
     /// Bound to port 1900 and joined to the SSDP group, which is what unsolicited `NOTIFY`
