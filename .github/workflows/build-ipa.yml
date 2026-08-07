@@ -36,8 +36,12 @@ jobs:
   build:
     runs-on: macos-latest
     # This build legitimately takes two to three hours, but without a ceiling a hang would
-    # burn the full six-hour maximum before GitHub intervenes.
-    timeout-minutes: 240
+    # burn the full six-hour maximum before GitHub intervenes. 240 was too tight: a healthy
+    # run is ~2h45m (1h25m linking the Kotlin framework, 1h18m in xcodebuild), leaving barely
+    # an hour of slack, and a slow runner ate all of it — one run reached three hours still
+    # linking, which meant the archive step could not have finished inside the ceiling no
+    # matter what. Still well under the six-hour maximum, so a genuine hang is still caught.
+    timeout-minutes: 330
 
     env:
       # The "full" distribution links against nuvio-engine's NuvioEngine.xcframework, which
