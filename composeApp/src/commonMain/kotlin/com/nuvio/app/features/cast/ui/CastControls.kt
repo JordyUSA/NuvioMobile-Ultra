@@ -3,7 +3,9 @@ package com.nuvio.app.features.cast.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +36,7 @@ import com.nuvio.app.features.cast.selectedCastTransport
 import com.nuvio.app.features.cast.dlna.DlnaConnectionState
 import com.nuvio.app.features.cast.dlna.DlnaDevice
 import com.nuvio.app.features.cast.dlna.DlnaPlatform
+import kotlinx.coroutines.delay
 
 /**
  * Whether the Cast affordance should be shown at all.
@@ -101,6 +104,20 @@ fun CastDevicePickerDialog(
         }
     }
 
+    // A healthy mDNS/SSDP search finds devices in a couple of seconds; a search that is
+    // still empty after this long is almost always blocked, not slow. The likeliest cause
+    // is an OS-level one the app cannot detect — iOS offers no API to read the Local
+    // Network permission, and a denial just makes every browse come back empty — so all
+    // we can do is say where to look.
+    var searchLooksStuck by remember { mutableStateOf(false) }
+    LaunchedEffect(receivers.isEmpty()) {
+        searchLooksStuck = false
+        if (receivers.isEmpty()) {
+            delay(12_000)
+            searchLooksStuck = true
+        }
+    }
+
     val connectedName = (castConnection as? CastConnectionState.Connected)?.device?.name
         ?: (dlnaConnection as? DlnaConnectionState.Connected)?.device?.name
     val connecting = castConnection is CastConnectionState.Connecting
@@ -114,7 +131,20 @@ fun CastDevicePickerDialog(
             Column {
                 when {
                     connecting -> Text("Connecting…")
-                    receivers.isEmpty() -> Text("Looking for devices on your Wi‑Fi…")
+                    receivers.isEmpty() -> Column {
+                        Text("Looking for devices on your Wi‑Fi…")
+                        if (searchLooksStuck) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "Still nothing? Check that this app is allowed to find " +
+                                    "devices on the local network in your phone's privacy " +
+                                    "settings, that Wi‑Fi is on, and that the TV is on the " +
+                                    "same network — guest networks and VPNs often block " +
+                                    "device discovery.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
                     else -> receivers.forEach { receiver ->
                         Row(
                             modifier = Modifier

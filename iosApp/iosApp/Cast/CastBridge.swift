@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import GoogleCast
 import ComposeApp
 
@@ -38,8 +39,15 @@ final class CastBridge: NSObject, CastIosBridge {
     static func install() -> CastBridge? {
         let criteria = GCKDiscoveryCriteria(applicationID: receiverApplicationID)
         let options = GCKCastOptions(discoveryCriteria: criteria)
-        // Discovery is started explicitly when the picker opens rather than at launch, so the
-        // radio is not kept busy browsing for devices the whole time the app is running.
+        // Discovery must be fully manual — started when the picker opens, stopped when it
+        // closes. startDiscoveryAfterFirstTapOnCastButton=false alone does not do that: it
+        // defers to disableDiscoveryAutostart, whose default (false) starts discovery the
+        // moment the context is created. That put iOS's one-shot Local Network permission
+        // prompt on the launch screen, where "Don't Allow" is the reflexive answer — and a
+        // denial leaves discovery returning empty lists forever with no error. Both flags
+        // together keep the browse, and therefore the prompt, inside the picker where the
+        // user can see why they're being asked.
+        options.disableDiscoveryAutostart = true
         options.startDiscoveryAfterFirstTapOnCastButton = false
         options.suspendSessionsWhenBackgrounded = false
         GCKCastContext.setSharedInstanceWith(options)
@@ -57,6 +65,21 @@ final class CastBridge: NSObject, CastIosBridge {
         onMain {
             guard !self.isDiscovering else { return }
             self.isDiscovering = true
+            // The first browse ever is what triggers iOS's Local Network permission alert,
+            // and that browse is already dead by the time the user taps Allow — it never
+            // recovers on its own, so a first open of the picker finds nothing even after
+            // granting. The alert deactivates the app, so becoming active again while the
+            // picker is open is the cue to restart the browse. It also catches the user
+            // coming back from Settings after flipping the Local Network toggle.
+            self.discoveryObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self, self.isDiscovering else { return }
+                self.discoveryManager.stopDiscovery()
+                self.discoveryManager.startDiscovery()
+            }
             self.discoveryManager.startDiscovery()
             self.publishDevices()
         }
@@ -66,6 +89,10 @@ final class CastBridge: NSObject, CastIosBridge {
         onMain {
             guard self.isDiscovering else { return }
             self.isDiscovering = false
+            if let observer = self.discoveryObserver {
+                NotificationCenter.default.removeObserver(observer)
+                self.discoveryObserver = nil
+            }
             self.discoveryManager.stopDiscovery()
         }
     }
