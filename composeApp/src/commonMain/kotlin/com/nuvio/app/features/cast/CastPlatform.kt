@@ -68,6 +68,14 @@ expect object CastPlatform {
     val connection: StateFlow<CastConnectionState>
     val playback: StateFlow<CastPlaybackState?>
 
+    /**
+     * A user-facing explanation of why discovery is finding nothing, when the platform can
+     * actually tell — iOS can detect its Local Network permission being denied, or the OS
+     * seeing receivers the Cast framework does not. Null whenever there is nothing to say,
+     * which is always the case on Android.
+     */
+    val discoveryDiagnostic: StateFlow<String?>
+
     /** Begins listening for receivers. Cheap to call repeatedly. */
     fun startDiscovery()
 

@@ -94,6 +94,7 @@ fun CastDevicePickerDialog(
 
     val castConnection by CastPlatform.connection.collectAsState()
     val dlnaConnection by DlnaPlatform.connection.collectAsState()
+    val discoveryDiagnostic by CastPlatform.discoveryDiagnostic.collectAsState()
 
     DisposableEffect(Unit) {
         CastPlatform.startDiscovery()
@@ -133,16 +134,28 @@ fun CastDevicePickerDialog(
                     connecting -> Text("Connecting…")
                     receivers.isEmpty() -> Column {
                         Text("Looking for devices on your Wi‑Fi…")
-                        if (searchLooksStuck) {
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "Still nothing? Check that this app is allowed to find " +
-                                    "devices on the local network in your phone's privacy " +
-                                    "settings, that Wi‑Fi is on, and that the TV is on the " +
-                                    "same network — guest networks and VPNs often block " +
-                                    "device discovery.",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
+                        // The platform's own finding beats the generic advice: when iOS can
+                        // say the permission is denied or that receivers exist that the Cast
+                        // framework can't see, show that instead of guessing.
+                        when {
+                            discoveryDiagnostic != null -> {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    discoveryDiagnostic.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            searchLooksStuck -> {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "Still nothing? Check that this app is allowed to find " +
+                                        "devices on the local network in your phone's privacy " +
+                                        "settings, that Wi‑Fi is on, and that the TV is on the " +
+                                        "same network — guest networks and VPNs often block " +
+                                        "device discovery.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                         }
                     }
                     else -> receivers.forEach { receiver ->

@@ -8,10 +8,23 @@ private let allowAutoRotateNotification = Notification.Name("NuvioAllowAutoRotat
 private let lockPortraitNotification = Notification.Name("NuvioLockPortrait")
 
 final class OrientationLockAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+
+    /// The Cast SDK's session and discovery listener registrations are weak, so the bridge
+    /// must be held strongly for the life of the app or state silently stops reaching the
+    /// shared code.
+    private var castBridge: CastBridge?
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // The Cast SDK is documented to be initialized here and no earlier. It used to be a
+        // stored property of `iOSApp`, but SwiftUI builds the App struct before UIKit has
+        // finished bringing the process up, and starting GCKCastContext that early is
+        // territory Google's reference sender never enters — didFinishLaunching is the
+        // earliest point it supports, and a mis-timed start left discovery permanently idle
+        // with nothing logged.
+        castBridge = CastBridge.install()
         OrientationLockCoordinator.shared.start()
         DownloadsLiveActivityManager.shared.start()
         UNUserNotificationCenter.current().delegate = self

@@ -57,6 +57,10 @@ actual object CastPlatform {
     private val _connection = MutableStateFlow<CastConnectionState>(CastConnectionState.Idle)
     actual val connection: StateFlow<CastConnectionState> = _connection.asStateFlow()
 
+    // Android's MediaRouter gives no signal that separates "blocked" from "empty network",
+    // so there is never a diagnostic to show.
+    actual val discoveryDiagnostic: StateFlow<String?> = MutableStateFlow(null)
+
     private val _playback = MutableStateFlow<CastPlaybackState?>(null)
     actual val playback: StateFlow<CastPlaybackState?> = _playback.asStateFlow()
 

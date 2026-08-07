@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import Network
 import GoogleCast
 import ComposeApp
 
@@ -19,6 +20,15 @@ final class CastBridge: NSObject, CastIosBridge {
 
     private var discoveryObserver: NSObjectProtocol?
     private var isDiscovering = false
+
+    /// Companion browse over the same `_googlecast._tcp` service the SDK watches, but through
+    /// Network.framework, which reports what the SDK swallows: a denied Local Network
+    /// permission surfaces as a `waiting` state, and the OS's own view of how many receivers
+    /// exist is visible regardless of what the SDK's device list says. It also guarantees the
+    /// permission prompt fires — on iOS 18 some sideloaded apps never get prompted through the
+    /// SDK's older browse path.
+    private var probeBrowser: NWBrowser?
+    private var lastProbeDrivenRestart = Date.distantPast
 
     /// Devices are addressed by `deviceID` across the bridge, so the SDK objects stay here.
     private var knownDevices: [String: GCKDevice] = [:]
@@ -53,6 +63,16 @@ final class CastBridge: NSObject, CastIosBridge {
         GCKCastContext.setSharedInstanceWith(options)
 
         let bridge = CastBridge()
+
+        // Google's documented debugging path: without this delegate the SDK's discovery
+        // failures — permission refusals, socket errors, dead browses — are discarded, and an
+        // empty device list is indistinguishable from a healthy empty network. NSLog puts
+        // them in the system log, so a device attached to Console.app shows the reason.
+        let logFilter = GCKLoggerFilter()
+        logFilter.minimumLevel = .debug
+        GCKLogger.sharedInstance().filter = logFilter
+        GCKLogger.sharedInstance().delegate = bridge
+
         GCKCastContext.sharedInstance().sessionManager.add(bridge)
         bridge.discoveryManager.add(bridge)
         CastBridgeRegistrationKt.registerCastBridge(bridge: bridge)
@@ -81,6 +101,7 @@ final class CastBridge: NSObject, CastIosBridge {
                 self.discoveryManager.startDiscovery()
             }
             self.discoveryManager.startDiscovery()
+            self.startProbe()
             self.publishDevices()
         }
     }
@@ -93,8 +114,50 @@ final class CastBridge: NSObject, CastIosBridge {
                 NotificationCenter.default.removeObserver(observer)
                 self.discoveryObserver = nil
             }
+            self.stopProbe()
             self.discoveryManager.stopDiscovery()
         }
+    }
+
+    private func startProbe() {
+        stopProbe()
+        let browser = NWBrowser(
+            for: .bonjour(type: "_googlecast._tcp", domain: nil),
+            using: NWParameters()
+        )
+        browser.stateUpdateHandler = { [weak self] state in
+            guard let self, self.isDiscovering else { return }
+            // `waiting` while browsing the local network means iOS refused the browse —
+            // in practice the Local Network permission — and it will sit there forever
+            // rather than fail. That is the only programmatic view of the denial Apple
+            // offers, so pass it up for the picker to explain.
+            if case .waiting = state {
+                CastPlatform.shared.onDiscoveryProbe(blocked: true, mdnsDeviceCount: 0)
+            }
+        }
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
+            guard let self, self.isDiscovering else { return }
+            CastPlatform.shared.onDiscoveryProbe(
+                blocked: false,
+                mdnsDeviceCount: Int32(results.count)
+            )
+            // The OS sees receivers the SDK doesn't: its browse most likely died in the
+            // permission race and never recovered, and a restart re-browses under the
+            // now-granted permission. Rate limited so a flapping network can't thrash it.
+            if !results.isEmpty, self.discoveryManager.deviceCount == 0,
+               Date().timeIntervalSince(self.lastProbeDrivenRestart) > 5 {
+                self.lastProbeDrivenRestart = Date()
+                self.discoveryManager.stopDiscovery()
+                self.discoveryManager.startDiscovery()
+            }
+        }
+        browser.start(queue: .main)
+        probeBrowser = browser
+    }
+
+    private func stopProbe() {
+        probeBrowser?.cancel()
+        probeBrowser = nil
     }
 
     func connect(deviceId: String) {
@@ -272,6 +335,14 @@ extension CastBridge: GCKSessionManagerListener {
 extension CastBridge: GCKRemoteMediaClientListener {
     func remoteMediaClient(_ client: GCKRemoteMediaClient, didUpdate mediaStatus: GCKMediaStatus?) {
         publishPlayback()
+    }
+}
+
+// MARK: - GCKLoggerDelegate
+
+extension CastBridge: GCKLoggerDelegate {
+    func logMessage(_ message: String, at level: GCKLoggerLevel, fromFunction function: String, location: String) {
+        NSLog("[GCKCast] %@ %@", function, message)
     }
 }
 

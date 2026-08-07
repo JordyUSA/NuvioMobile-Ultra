@@ -58,14 +58,19 @@ actual object CastPlatform {
     private val _playback = MutableStateFlow<CastPlaybackState?>(null)
     actual val playback: StateFlow<CastPlaybackState?> = _playback.asStateFlow()
 
+    private val _discoveryDiagnostic = MutableStateFlow<String?>(null)
+    actual val discoveryDiagnostic: StateFlow<String?> = _discoveryDiagnostic.asStateFlow()
+
     /** Completion for the in-flight [load], resolved by Swift through [onLoadResult]. */
     private var pendingLoad: ((Result<Unit>) -> Unit)? = null
 
     actual fun startDiscovery() {
+        _discoveryDiagnostic.value = null
         bridge?.startDiscovery()
     }
 
     actual fun stopDiscovery() {
+        _discoveryDiagnostic.value = null
         bridge?.stopDiscovery()
     }
 
@@ -137,6 +142,32 @@ actual object CastPlatform {
 
     fun onDevicesChanged(devices: List<CastDevice>) {
         _devices.value = devices
+        // Whatever the probe suspected, the SDK finding devices settles it.
+        if (devices.isNotEmpty()) _discoveryDiagnostic.value = null
+    }
+
+    /**
+     * Findings from Swift's companion NWBrowser probe, which browses the same
+     * `_googlecast._tcp` service as the Cast SDK but through Network.framework, where iOS
+     * exposes what the SDK hides: [blocked] is true when the browse sits in the waiting
+     * state that means the Local Network permission is denied, and [mdnsDeviceCount] is how
+     * many Cast receivers the OS itself can see. Between the two, an empty picker becomes
+     * attributable: blocked means the permission, receivers-without-SDK-devices means the
+     * framework, and zero everywhere means the network really is empty.
+     */
+    fun onDiscoveryProbe(blocked: Boolean, mdnsDeviceCount: Int) {
+        _discoveryDiagnostic.value = when {
+            blocked ->
+                "iOS is blocking this app's local network access, so no devices can be " +
+                    "found. Turn on Local Network for this app in Settings → Privacy & " +
+                    "Security → Local Network, then reopen this picker. On iOS 18, restart " +
+                    "the phone after turning it on."
+            mdnsDeviceCount > 0 && _devices.value.isEmpty() ->
+                "Your Wi‑Fi has $mdnsDeviceCount Cast device(s) visible, but the Cast " +
+                    "framework can't see them yet. Close and reopen this picker; if that " +
+                    "doesn't help, restart the app."
+            else -> null
+        }
     }
 
     /** [state]: 0 idle, 1 connecting, 2 connected, 3 failed. */
