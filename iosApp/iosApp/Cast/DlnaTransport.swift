@@ -120,6 +120,7 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
         // SSDP rides on UDP multicast, which is lossy over Wi-Fi, and a single dropped datagram
         // hides a device for a whole search interval. Repeating each target is what the spec
         // expects of a control point and is the biggest factor in whether a TV turns up at all.
+        var multicastSendSucceeded = false
         for attempt in 0..<Self.searchAttempts {
             for target in Self.searchTargets {
                 let request = "M-SEARCH * HTTP/1.1\r\n" +
@@ -129,15 +130,26 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
                     "ST: \(target)\r\n" +
                     "\r\n"
                 let requestBytes = Array(request.utf8)
-                _ = withUnsafePointer(to: &destination) { pointer -> Int in
+                let sent = withUnsafePointer(to: &destination) { pointer -> Int in
                     pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
                         sendto(socketFd, requestBytes, requestBytes.count, 0, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
                     }
                 }
+                if sent >= 0 { multicastSendSucceeded = true }
             }
             if attempt < Self.searchAttempts - 1 {
                 Thread.sleep(forTimeInterval: Self.searchAttemptGapSeconds)
             }
+        }
+
+        // Without com.apple.developer.networking.multicast — an entitlement Apple grants only
+        // on application, docs/ios-multicast-entitlement.md — every one of those sendto calls
+        // fails with EPERM and DLNA discovery finds nothing, silently. UPnP 1.1's unicast
+        // M-SEARCH needs no entitlement, only the same Local Network permission Chromecast
+        // discovery already prompts for, so sweep the Wi-Fi subnet instead. Responses arrive
+        // on this same socket either way, so the receive window below serves both paths.
+        if !multicastSendSucceeded {
+            sweepSubnetWithUnicastSearch(socketFd: socketFd)
         }
 
         let deadline = Date().addingTimeInterval(Self.searchWindowSeconds)
@@ -160,6 +172,87 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
         onMain { DlnaPlatform.shared.onSearchCycleCompleted() }
     }
 
+    /// Active search without the multicast entitlement: a unicast M-SEARCH to every address on
+    /// the Wi-Fi subnet. UPnP 1.1 defines unicast search — HOST names the device itself and MX
+    /// is omitted, so the device answers immediately instead of spreading replies over a
+    /// window. Not every renderer implements it, which is why this is the fallback and not the
+    /// primary path, but for the common home /24 it reliably finds the mainstream TVs.
+    private func sweepSubnetWithUnicastSearch(socketFd: Int32) {
+        guard let interface = wifiIPv4() else { return }
+        let local = interface.address
+        var first = (local & interface.netmask) + 1
+        var last = (local | ~interface.netmask) - 1
+        guard first <= last else { return }
+        // A corporate-sized mask would mean tens of thousands of datagrams. Past a /22, stay
+        // inside the /24 around this phone — where a home television will be anyway.
+        if last - first >= 1024 {
+            first = (local & 0xFFFF_FF00) + 1
+            last = first + 253
+        }
+
+        var destination = sockaddr_in()
+        destination.sin_family = sa_family_t(AF_INET)
+        destination.sin_port = Self.multicastPort.bigEndian
+
+        var sent = 0
+        for host in first...last where host != local {
+            guard discoveryActive else { return }
+            destination.sin_addr.s_addr = in_addr_t(host.bigEndian)
+            let dotted = "\((host >> 24) & 255).\((host >> 16) & 255).\((host >> 8) & 255).\(host & 255)"
+            for target in Self.searchTargets {
+                let request = "M-SEARCH * HTTP/1.1\r\n" +
+                    "HOST: \(dotted):\(Self.multicastPort)\r\n" +
+                    "MAN: \"ssdp:discover\"\r\n" +
+                    "ST: \(target)\r\n" +
+                    "\r\n"
+                let requestBytes = Array(request.utf8)
+                _ = withUnsafePointer(to: &destination) { pointer -> Int in
+                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                        sendto(socketFd, requestBytes, requestBytes.count, 0, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    }
+                }
+            }
+            sent += 1
+            // A breather every few dozen hosts keeps the burst from overrunning the send
+            // buffer or the Wi-Fi driver's queue; the whole /24 still finishes in ~a second,
+            // well inside the receive window that follows.
+            if sent % 64 == 0 { Thread.sleep(forTimeInterval: 0.02) }
+        }
+    }
+
+    /// The Wi-Fi interface's IPv4 address and netmask — `en0` on every iPhone — or, failing
+    /// that, the first other routable interface that is not a tunnel, cellular, or
+    /// peer-to-peer link, whose subnets cannot contain a television. Host byte order.
+    private func wifiIPv4() -> (address: UInt32, netmask: UInt32)? {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0 else { return nil }
+        defer { freeifaddrs(head) }
+
+        var fallback: (address: UInt32, netmask: UInt32)?
+        var cursor = head
+        while let entry = cursor?.pointee {
+            defer { cursor = entry.ifa_next }
+            guard
+                (entry.ifa_flags & UInt32(IFF_UP)) != 0,
+                (entry.ifa_flags & UInt32(IFF_LOOPBACK)) == 0,
+                let addressPointer = entry.ifa_addr,
+                addressPointer.pointee.sa_family == sa_family_t(AF_INET),
+                let netmaskPointer = entry.ifa_netmask
+            else { continue }
+
+            let address = UInt32(bigEndian: addressPointer.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr.s_addr })
+            let netmask = UInt32(bigEndian: netmaskPointer.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr.s_addr })
+            guard address != 0, netmask != 0 else { continue }
+
+            let name = String(cString: entry.ifa_name)
+            if name == "en0" { return (address, netmask) }
+            let unroutable = name.hasPrefix("utun") || name.hasPrefix("ipsec")
+                || name.hasPrefix("pdp_ip") || name.hasPrefix("awdl") || name.hasPrefix("llw")
+            if fallback == nil && !unroutable { fallback = (address, netmask) }
+        }
+        return fallback
+    }
+
     /// A plain UDP socket for the active search: SSDP search *responses* come back as ordinary
     /// unicast datagrams addressed to this socket's own ephemeral port, so it does not need to
     /// join the multicast group. Unsolicited `NOTIFY` announcements do, and are handled by
@@ -175,6 +268,19 @@ final class DlnaTransport: NSObject, DlnaTransportBridge {
 
         var ttl: UInt8 = 4
         setsockopt(socketFd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, socklen_t(MemoryLayout<UInt8>.size))
+
+        // The unicast sweep can have a whole subnet's answers land while datagrams are still
+        // going out; the default receive buffer silently drops the overflow.
+        var receiveBuffer: Int32 = 256 * 1024
+        setsockopt(socketFd, SOL_SOCKET, SO_RCVBUF, &receiveBuffer, socklen_t(MemoryLayout<Int32>.size))
+
+        // With a VPN up, the default multicast route is the tunnel, which swallows the search
+        // without an error. Pinning multicast to the Wi-Fi interface keeps that path honest
+        // for the day the entitlement makes it usable.
+        if let interface = wifiIPv4() {
+            var wifiAddress = in_addr(s_addr: in_addr_t(interface.address.bigEndian))
+            setsockopt(socketFd, IPPROTO_IP, IP_MULTICAST_IF, &wifiAddress, socklen_t(MemoryLayout<in_addr>.size))
+        }
 
         return socketFd
     }

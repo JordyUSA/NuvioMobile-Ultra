@@ -1,13 +1,22 @@
-# iOS multicast entitlement (required for DLNA discovery)
+# iOS multicast entitlement (for full-fidelity DLNA discovery)
 
-DLNA discovery on iOS does not work — and cannot be made to work in code — until Apple grants
-this app the **Multicast Networking** entitlement. Everything else in
-`iosApp/iosApp/Cast/DlnaTransport.swift` is correct and will start finding devices the moment the
-entitlement is in place; without it, `sendto()` to `239.255.255.250` fails and the device list
-stays permanently empty.
+Multicast SSDP on iOS does not work until Apple grants this app the **Multicast Networking**
+entitlement: `sendto()` to `239.255.255.250` fails with `EPERM`, joining the group for `NOTIFY`
+announcements fails the same way, and nothing throws or prompts — the failure shape `Info.plist`
+already documents for the Cast SDK.
 
-This is the same failure shape the Cast SDK hit and that `Info.plist` already documents: nothing
-throws, no permission prompt appears, the list is simply empty forever.
+`DlnaTransport.swift` no longer depends on it for basic discovery: when every multicast send is
+refused, `performSearch()` falls back to UPnP 1.1 **unicast** M-SEARCH, swept across the Wi-Fi
+subnet. Unicast UDP to LAN hosts needs no entitlement — only the Local Network permission the
+Cast side already prompts for — so mainstream renderers on a home /24 are found without Apple's
+sign-off. The entitlement is still worth requesting, because the fallback is strictly worse
+than the real thing:
+
+- devices are only found by the sweep if they implement unicast search, which some older
+  renderers do not;
+- passive `NOTIFY` listening stays dead, so a TV switched on mid-session only appears at the
+  next 10-second search cycle rather than announcing itself;
+- the sweep is capped near a /24, so renderers on large or segmented subnets stay invisible.
 
 ## Why the existing keys are not enough
 
