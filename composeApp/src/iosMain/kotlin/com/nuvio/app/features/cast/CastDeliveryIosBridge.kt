@@ -19,6 +19,12 @@ interface CastLocalServerBridge {
         headerValues: List<String>,
     ): String?
 
+    /**
+     * Publishes a directory of HLS output. [entryFile] is the playlist's name within it, and
+     * the returned URL points at that file; segments alongside it are served by name.
+     */
+    fun publishDirectory(id: String, directoryPath: String, entryFile: String): String?
+
     fun unpublish(id: String)
 }
 

@@ -4,11 +4,10 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.delay
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSUUID
-import kotlin.coroutines.resume
 
 /**
  * iOS delivery.
@@ -34,6 +33,17 @@ actual object CastDelivery {
     private var pendingMode: CastDeliveryMode? = null
     private var pendingReasons: List<CastIncompatibility> = emptyList()
 
+    /** Set when a conversion reports failure, so the wait for a playable playlist gives up. */
+    private var transcodeFailed = false
+
+    /** True once the receiver has the stream, after which progress no longer drives status. */
+    private var handedOff = false
+
+    /** Name of the HLS playlist inside the working directory. */
+    private const val PLAYLIST_NAME = "index.m3u8"
+    private const val POLL_INTERVAL_MS = 250L
+    private const val PLAYLIST_TIMEOUT_MS = 90_000L
+
     private val _status = MutableStateFlow<CastDeliveryStatus>(CastDeliveryStatus.Idle)
     actual val status: StateFlow<CastDeliveryStatus> = _status.asStateFlow()
 
@@ -44,6 +54,7 @@ actual object CastDelivery {
         val receiver = resolveActiveReceiver() ?: return fail("No Cast device connected")
 
         releasePrevious()
+        handedOff = false
 
         val capabilities = receiver.capabilities
 
@@ -88,11 +99,23 @@ actual object CastDelivery {
             val transcoder = transcoderBridge ?: return fail("Casting is not available")
             _status.value = CastDeliveryStatus.Preparing(plan.mode, -1, plan.reasons)
 
-            val outputPath = NSTemporaryDirectory() + "cast_${newId()}.mp4"
-            workingFilePath = outputPath
+            // HLS into a directory, not a single file. The receiver is handed the playlist as
+            // soon as the first segments exist and plays them while the rest is still being
+            // produced, instead of waiting for an entire film to be converted first.
+            val directory = NSTemporaryDirectory() + "cast_${newId()}"
+            if (!NSFileManager.defaultManager.createDirectoryAtPath(
+                    directory, withIntermediateDirectories = true, attributes = null, error = null,
+                )
+            ) {
+                return fail("Could not prepare this file for casting")
+            }
+            workingFilePath = directory
 
-            val produced = runTranscode(transcoder, request, plan, probe?.durationMs, outputPath)
-            if (produced.isFailure) {
+            startTranscode(transcoder, request, plan, probe?.durationMs, "$directory/$PLAYLIST_NAME")
+
+            // Wait only for enough of a head start to play from, not for the whole conversion.
+            if (!awaitPlayablePlaylist(directory)) {
+                transcoder.cancel()
                 return fail(
                     when (plan.mode) {
                         CastDeliveryMode.REMUX -> "Could not repackage this file for casting"
@@ -101,10 +124,10 @@ actual object CastDelivery {
                 )
             }
 
-            contentType = "video/mp4"
+            contentType = "application/x-mpegURL"
             val id = newId()
             publishedId = id
-            contentUrl = server.publishLocalFile(id, outputPath, contentType)
+            contentUrl = server.publishDirectory(id, directory, PLAYLIST_NAME)
                 ?: return fail("Phone is not on a network the TV can reach")
         }
 
@@ -125,6 +148,7 @@ actual object CastDelivery {
 
         return result.fold(
             onSuccess = {
+                handedOff = true
                 _status.value = CastDeliveryStatus.Playing(plan.mode)
                 Result.success(Unit)
             },
@@ -154,6 +178,10 @@ actual object CastDelivery {
 
     fun onTranscodeProgress(percent: Int) {
         val mode = pendingMode ?: return
+        // Conversion continues long after the receiver has started playing now, and those
+        // updates must not drag the status back to "preparing" while the television is
+        // already showing the picture.
+        if (handedOff) return
         _status.value = CastDeliveryStatus.Preparing(mode, percent, pendingReasons)
     }
 
@@ -171,22 +199,55 @@ actual object CastDelivery {
 
     // -------------------------------------------------------------------------------------
 
-    private suspend fun runTranscode(
+    /**
+     * True once the playlist lists a segment the receiver could start on.
+     *
+     * ffmpeg only appends a segment once it has been closed and renamed into place, so a name
+     * appearing here is a file that exists in full. Two segments are waited for rather than
+     * one: handing over on the very first leaves no margin at all, and the second costs a few
+     * seconds against a conversion that runs for many minutes.
+     */
+    @OptIn(ExperimentalForeignApi::class)
+    private suspend fun awaitPlayablePlaylist(directory: String): Boolean {
+        var waited = 0L
+        while (waited < PLAYLIST_TIMEOUT_MS) {
+            // A conversion that dies reports through onTranscodeCompleted; without this the
+            // wait would sit here until the deadline for a job that is already over.
+            if (transcodeFailed) return false
+
+            val entries = NSFileManager.defaultManager
+                .contentsOfDirectoryAtPath(directory, error = null)
+                ?.filterIsInstance<String>()
+                .orEmpty()
+            // ffmpeg writes each segment under a temporary name and renames it once closed, so
+            // a segment visible under its final name is a whole one. Two rather than one: a
+            // single segment leaves the receiver with no margin, and the second costs a few
+            // seconds against a conversion that runs for many minutes.
+            val playlistWritten = entries.any { it == PLAYLIST_NAME }
+            val finishedSegments = entries.count { it.startsWith("seg") && !it.endsWith(".tmp") }
+            if (playlistWritten && finishedSegments >= 2) return true
+
+            delay(POLL_INTERVAL_MS)
+            waited += POLL_INTERVAL_MS
+        }
+        return false
+    }
+
+    private fun startTranscode(
         transcoder: CastTranscoderBridge,
         request: CastStreamRequest,
         plan: CastDeliveryPlan,
         durationMs: Long?,
         outputPath: String,
-    ): Result<Unit> = suspendCancellableCoroutine { continuation ->
+    ) {
         pendingMode = plan.mode
         pendingReasons = plan.reasons
+        transcodeFailed = false
+        // Deliberately not awaited. The conversion keeps running long after the receiver has
+        // started playing, and only reports back here if it fails.
         pendingTranscode = { result ->
             pendingTranscode = null
-            if (continuation.isActive) continuation.resume(result)
-        }
-        continuation.invokeOnCancellation {
-            transcoder.cancel()
-            pendingTranscode = null
+            if (result.isFailure) transcodeFailed = true
         }
 
         val video = plan.videoTarget
@@ -210,6 +271,10 @@ actual object CastDelivery {
 
     @OptIn(ExperimentalForeignApi::class)
     private fun releasePrevious() {
+        // A conversion now outlives the handoff, so it has to be stopped before its working
+        // directory is deleted out from under it.
+        transcoderBridge?.cancel()
+        pendingTranscode = null
         publishedId?.let { localServerBridge?.unpublish(it) }
         publishedId = null
         workingFilePath?.let { path -> NSFileManager.defaultManager.removeItemAtPath(path, error = null) }

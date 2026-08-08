@@ -376,10 +376,43 @@ final class CastTranscoder {
         }
 
         // Subtitles are delivered to the receiver as separate VTT tracks, so drop any the
-        // container carries rather than failing on a codec MP4 cannot hold.
+        // container carries rather than failing on a codec the container cannot hold.
         arguments += ["-sn"]
-        // Put the index at the front so the receiver can seek without fetching the tail.
-        arguments += ["-movflags", "+faststart"]
+
+        if outputPath.hasSuffix(".m3u8") {
+            // HLS, so the receiver can start playing while the rest is still being produced.
+            //
+            // The previous output was a single MP4 finished with `+faststart`, which rewrites
+            // the whole file at the end to move the index to the front. That makes the output
+            // worthless until the very last moment: nothing could be handed to the television
+            // until an entire film had been converted. Here ffmpeg closes a segment every few
+            // seconds and appends it to the playlist, and the receiver plays what exists while
+            // the rest catches up.
+            let directory = (outputPath as NSString).deletingLastPathComponent
+            // `event` keeps every segment listed, so the viewer can seek back over anything
+            // already produced, and tells the receiver more is still coming.
+            arguments += ["-f", "hls", "-hls_time", "4", "-hls_playlist_type", "event"]
+            // `temp_file` writes each segment under a temporary name and renames it once
+            // complete, so a segment named in the playlist is never half-written when the
+            // receiver asks for it. `independent_segments` lets it start at any segment.
+            arguments += ["-hls_flags", "independent_segments+temp_file"]
+
+            if videoTarget != nil {
+                // Re-encoded video is always H.264/AAC, which every receiver plays as MPEG-TS.
+                arguments += ["-hls_segment_type", "mpegts"]
+                arguments += ["-hls_segment_filename", "\(directory)/seg%05d.ts"]
+            } else {
+                // Copied video keeps whatever codec the source had, and MPEG-TS carries HEVC
+                // poorly; fragmented MP4 holds both.
+                arguments += ["-hls_segment_type", "fmp4"]
+                arguments += ["-hls_fmp4_init_filename", "init.mp4"]
+                arguments += ["-hls_segment_filename", "\(directory)/seg%05d.m4s"]
+            }
+        } else {
+            // Put the index at the front so the receiver can seek without fetching the tail.
+            arguments += ["-movflags", "+faststart"]
+        }
+
         arguments += ["-y", outputPath]
 
         return arguments

@@ -31,6 +31,15 @@ final class CastDeliveryBridge: NSObject, CastLocalServerBridge, CastTranscoderB
         server.publish(id: id, payload: .proxy(url: url, contentType: contentType, headers: Self.zip(headerNames, headerValues)))
     }
 
+    func publishDirectory(id: String, directoryPath: String, entryFile: String) -> String? {
+        // The route's own URL addresses the directory; the playlist is a file inside it, and
+        // the segments it names are fetched as siblings.
+        guard let base = server.publish(id: id, payload: .directory(path: directoryPath)) else {
+            return nil
+        }
+        return "\(base)/\(entryFile)"
+    }
+
     func unpublish(id: String) {
         server.unpublish(id: id)
     }

@@ -27,6 +27,12 @@ final class CastLocalServer {
         /// headers the Cast receiver cannot send, or lives on an address only the phone can
         /// reach.
         case proxy(url: String, contentType: String, headers: [String: String])
+
+        /// A directory of HLS output — the playlist and its segments — served by name under
+        /// the route. This is what lets a transcode start playing before it has finished:
+        /// ffmpeg appends each finished segment to the playlist, and the receiver fetches
+        /// them as they appear instead of waiting for one complete file.
+        case directory(path: String)
     }
 
     private let queue = DispatchQueue(label: "cast-local-server")
@@ -203,7 +209,13 @@ final class CastLocalServer {
             return respond(connection, status: 405, reason: "Method Not Allowed")
         }
 
-        let id = String(path.dropFirst("/media/".count)).components(separatedBy: "?").first ?? ""
+        // A directory route is addressed as /media/<id>/<file>, so the id is only the first
+        // path component and whatever follows names a file inside it.
+        let trimmed = String(path.dropFirst("/media/".count)).components(separatedBy: "?").first ?? ""
+        let components = trimmed.components(separatedBy: "/")
+        let id = components.first ?? ""
+        let subPath = components.dropFirst().joined(separator: "/")
+
         routesLock.lock()
         let payload = routes[id]
         routesLock.unlock()
@@ -217,6 +229,33 @@ final class CastLocalServer {
             serveFile(path: path, contentType: contentType, rangeHeader: rangeHeader, headOnly: method == "HEAD", connection: connection)
         case let .proxy(url, contentType, headers):
             serveProxy(url: url, contentType: contentType, headers: headers, rangeHeader: rangeHeader, headOnly: method == "HEAD", connection: connection)
+        case let .directory(root):
+            // Refuse anything that climbs out of the directory. The receiver only ever asks
+            // for names this server put in the playlist, but the route is reachable by
+            // anything on the Wi-Fi, so the check is not optional.
+            guard !subPath.isEmpty, !subPath.contains("..") else {
+                return respond(connection, status: 404, reason: "Not Found")
+            }
+            let filePath = (root as NSString).appendingPathComponent(subPath)
+            serveFile(
+                path: filePath,
+                contentType: Self.contentType(forPath: subPath),
+                rangeHeader: rangeHeader,
+                headOnly: method == "HEAD",
+                connection: connection
+            )
+        }
+    }
+
+    /// Content types for the files an HLS output directory contains. The playlist type matters:
+    /// a receiver handed `video/mp4` for an .m3u8 will try to demux the text as media.
+    private static func contentType(forPath path: String) -> String {
+        switch (path as NSString).pathExtension.lowercased() {
+        case "m3u8": return "application/vnd.apple.mpegurl"
+        case "ts": return "video/mp2t"
+        case "m4s", "mp4": return "video/mp4"
+        case "vtt": return "text/vtt"
+        default: return "application/octet-stream"
         }
     }
 
