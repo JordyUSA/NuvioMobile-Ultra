@@ -75,6 +75,17 @@ actual object CastDelivery {
             requiresLocalServer = !request.sourceReachableByReceiver,
         )
 
+        // Which route a stream takes decides everything downstream, and nothing recorded it —
+        // a log showing a failure two seconds after loading gave no way to tell whether the
+        // television had been handed a proxy URL, a playlist, or the origin itself.
+        CastDiagnostics.log(
+            "Deliver",
+            "plan=${plan.mode} container=${plan.targetContainer} " +
+                "localServer=${plan.requiresLocalServer} reachable=${request.sourceReachableByReceiver} " +
+                "video=${probe?.videoCodec ?: "?"} audio=${probe?.audioCodecs?.firstOrNull() ?: "?"} " +
+                "reasons=${plan.reasons.joinToString(",") { it::class.simpleName ?: "?" }}",
+        )
+
         if (plan.mode == CastDeliveryMode.UNSUPPORTED) {
             return fail("${receiver.name} cannot play video")
         }
@@ -132,6 +143,8 @@ actual object CastDelivery {
         }
 
         // --- Hand off ------------------------------------------------------------------
+        CastDiagnostics.log("Deliver", "handing over $contentType — $contentUrl")
+
         val result = receiver.deliver(
             CastMediaRequest(
                 contentUrl = contentUrl,
@@ -282,6 +295,7 @@ actual object CastDelivery {
     }
 
     private fun fail(message: String): Result<Unit> {
+        CastDiagnostics.log("Deliver", "failed: $message")
         _status.value = CastDeliveryStatus.Failed(message)
         return Result.failure(IllegalStateException(message))
     }

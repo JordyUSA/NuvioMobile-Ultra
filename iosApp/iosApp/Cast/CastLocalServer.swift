@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import ComposeApp
 
 /// A minimal HTTP server so a Chromecast can pull media from the phone.
 ///
@@ -149,15 +150,37 @@ final class CastLocalServer {
 
     // MARK: - Connection handling
 
+    /// Per-connection state. `onDead` is filled in later by whichever handler serves the
+    /// request, but the state handler that invokes it has to be installed before `start`,
+    /// which is the only point NWConnection promises to honour it.
+    final class ConnectionContext {
+        var onDead: (() -> Void)?
+        var described = ""
+    }
+
     private func accept(_ connection: NWConnection) {
+        let context = ConnectionContext()
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .cancelled, .failed:
+                context.onDead?()
+                context.onDead = nil
+            default:
+                break
+            }
+        }
         connection.start(queue: queue)
-        readRequest(connection: connection, buffered: Data())
+        readRequest(connection: connection, context: context, buffered: Data())
+    }
+
+    private func log(_ message: String) {
+        DispatchQueue.main.async { CastDiagnostics.shared.log(tag: "Serve", message: message) }
     }
 
     /// Reads until the blank line that ends the request headers. HTTP request lines and
     /// headers are always ASCII, so a byte-oriented search for `\r\n\r\n` is enough; the body
     /// (there is none for GET/HEAD) is not touched.
-    private func readRequest(connection: NWConnection, buffered: Data) {
+    private func readRequest(connection: NWConnection, context: ConnectionContext, buffered: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             var buffer = buffered
@@ -171,7 +194,7 @@ final class CastLocalServer {
 
             if let range = buffer.range(of: Data([0x0D, 0x0A, 0x0D, 0x0A])) {
                 let headerData = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
-                self.handleRequest(headerData, connection: connection)
+                self.handleRequest(headerData, connection: connection, context: context)
                 return
             }
 
@@ -180,11 +203,11 @@ final class CastLocalServer {
                 return
             }
 
-            self.readRequest(connection: connection, buffered: buffer)
+            self.readRequest(connection: connection, context: context, buffered: buffer)
         }
     }
 
-    private func handleRequest(_ headerData: Data, connection: NWConnection) {
+    private func handleRequest(_ headerData: Data, connection: NWConnection, context: ConnectionContext) {
         let text = String(decoding: headerData, as: UTF8.self)
         var lines = text.components(separatedBy: "\r\n")
         guard !lines.isEmpty else { return respond(connection, status: 400, reason: "Bad Request") }
@@ -224,11 +247,14 @@ final class CastLocalServer {
             return respond(connection, status: 404, reason: "Not Found")
         }
 
+        context.described = "\(method) \(trimmed)\(rangeHeader.map { " [\($0)]" } ?? "")"
+        log("→ \(context.described)")
+
         switch payload {
         case let .localFile(path, contentType):
             serveFile(path: path, contentType: contentType, rangeHeader: rangeHeader, headOnly: method == "HEAD", connection: connection)
         case let .proxy(url, contentType, headers):
-            serveProxy(url: url, contentType: contentType, headers: headers, rangeHeader: rangeHeader, headOnly: method == "HEAD", connection: connection)
+            serveProxy(url: url, contentType: contentType, headers: headers, rangeHeader: rangeHeader, headOnly: method == "HEAD", connection: connection, context: context)
         case let .directory(root):
             // Refuse anything that climbs out of the directory. The receiver only ever asks
             // for names this server put in the playlist, but the route is reachable by
@@ -321,7 +347,7 @@ final class CastLocalServer {
 
     // MARK: - Proxy
 
-    private func serveProxy(url: String, contentType: String, headers: [String: String], rangeHeader: String?, headOnly: Bool, connection: NWConnection) {
+    private func serveProxy(url: String, contentType: String, headers: [String: String], rangeHeader: String?, headOnly: Bool, connection: NWConnection, context: ConnectionContext) {
         guard let requestUrl = URL(string: url) else {
             return respond(connection, status: 502, reason: "Bad Gateway")
         }
@@ -343,6 +369,7 @@ final class CastLocalServer {
             contentType: contentType,
             headOnly: headOnly,
             onResponse: { [weak self] status, reason, contentLength, contentRange, ready in
+                self?.log("← \(status) upstream for \(context.described), length \(contentLength.map(String.init) ?? "unknown")")
                 self?.sendHeaders(
                     connection: connection, status: status, reason: reason,
                     contentType: contentType, contentLength: contentLength, contentRange: contentRange,
@@ -350,10 +377,13 @@ final class CastLocalServer {
                 )
             },
             onData: { data, ready in
-                connection.send(content: data, completion: .contentProcessed { error in
+                connection.send(content: data, completion: .contentProcessed { [weak self] error in
                     // Nothing is listening any more: drop the fetch behind it rather than
                     // pulling the rest of the file across the network for a dead socket.
-                    if error != nil { session.invalidateAndCancel() }
+                    if let error {
+                        self?.log("send failed for \(context.described): \(error)")
+                        session.invalidateAndCancel()
+                    }
                     ready()
                 })
             },
@@ -367,18 +397,11 @@ final class CastLocalServer {
         task.delegate = streamer
         streamer.retain(task)
 
-        // The receiver hangs up the moment it has the range it wanted. Cancelling the upstream
-        // fetch with it is what keeps abandoned downloads from accumulating and competing for
-        // bandwidth with the request that replaced them. Installed before `resume` so a
-        // connection that has already gone is caught too.
-        connection.stateUpdateHandler = { state in
-            switch state {
-            case .cancelled, .failed:
-                session.invalidateAndCancel()
-            default:
-                break
-            }
-        }
+        // The receiver hangs up the moment it has the range it wanted; cancelling the upstream
+        // fetch with it keeps abandoned downloads from accumulating. Registered on the context
+        // rather than by replacing the connection's handler, which is installed in `accept`
+        // before `start` — reassigning it afterwards is not honoured.
+        context.onDead = { session.invalidateAndCancel() }
 
         task.resume()
     }
