@@ -180,33 +180,67 @@ final class CastTranscoder {
         )
     }
 
+    /// Reads a stream property as text whatever ffprobe actually emitted for it.
+    ///
+    /// FFmpegKit declares every property accessor as returning `NSString`, but it hands back
+    /// the raw JSON value unchecked, and ffprobe emits numbers for several of these keys —
+    /// `level` and `channels` among them. Swift trusts the declaration and force-bridges, so an
+    /// `NSNumber` gets sent a string selector and the process aborts. That is not hypothetical:
+    /// it is what `String._unconditionallyBridgeFromObjectiveC` inside `parseProbe` was doing
+    /// in two crash reports from the field, on every stream whose probe reported a codec level.
+    ///
+    /// Going through `getProperty`, which is honestly typed as `id`, removes the whole class of
+    /// bug rather than the two keys that happened to be caught.
+    private static func text(_ stream: StreamInformation?, _ key: String) -> String? {
+        switch stream?.getProperty(key) {
+        case let value as NSString: return value as String
+        case let value as NSNumber: return value.stringValue
+        default: return nil
+        }
+    }
+
+    /// The same for the format-level dictionary, which has the same unchecked typing.
+    private static func text(_ info: MediaInformation, _ key: String) -> String? {
+        switch info.getProperty(key) {
+        case let value as NSString: return value as String
+        case let value as NSNumber: return value.stringValue
+        default: return nil
+        }
+    }
+
     private static func parseProbe(_ info: MediaInformation) -> ProbeResult {
         let streams = (info.getStreams() as? [StreamInformation]) ?? []
-        let video = streams.first { $0.getType() == "video" }
-        let audioStreams = streams.filter { $0.getType() == "audio" }
+        let video = streams.first { text($0, "codec_type") == "video" }
+        let audioStreams = streams.filter { text($0, "codec_type") == "audio" }
 
-        let durationSeconds = Double(info.getDuration() ?? "") ?? 0
-        let level = Int(video?.getStringProperty("level") ?? "") ?? 0
-        let profileName = video?.getStringProperty("profile") ?? ""
+        let durationSeconds = Double(text(info, "duration") ?? "") ?? 0
+        let level = Int(text(video, "level") ?? "") ?? 0
+        let profileName = text(video, "profile") ?? ""
         let profile = level > 0 ? "\(profileName) Profile Level \(Double(level) / 10.0)" : profileName
 
         return ProbeResult(
             durationMs: Int64(durationSeconds * 1000),
             hasVideo: video != nil,
-            videoCodec: video?.getCodec() ?? "",
+            videoCodec: text(video, "codec_name") ?? "",
             videoWidth: video?.getWidth()?.intValue ?? 0,
             videoHeight: video?.getHeight()?.intValue ?? 0,
             videoFrameRate: frameRate(video),
-            videoBitrateBitsPerSecond: Int64(video?.getBitrate() ?? "") ?? 0,
+            videoBitrateBitsPerSecond: Int64(text(video, "bit_rate") ?? "") ?? 0,
             videoProfile: profile,
-            videoPixelFormat: video?.getStringProperty("pix_fmt") ?? "",
-            videoBitsPerRawSample: video?.getStringProperty("bits_per_raw_sample") ?? "",
-            videoColorTransfer: video?.getStringProperty("color_transfer") ?? "",
-            audioCodecs: audioStreams.map { $0.getCodec() ?? "" },
-            audioChannelCounts: audioStreams.map { Int($0.getStringProperty("channels") ?? "") ?? 2 },
-            audioSampleRates: audioStreams.map { Int($0.getSampleRate() ?? "") ?? 0 },
-            audioBitrates: audioStreams.map { Int64($0.getBitrate() ?? "") ?? 0 },
-            audioLanguages: audioStreams.map { $0.getTags()?["language"] as? String ?? "" }
+            videoPixelFormat: text(video, "pix_fmt") ?? "",
+            videoBitsPerRawSample: text(video, "bits_per_raw_sample") ?? "",
+            videoColorTransfer: text(video, "color_transfer") ?? "",
+            audioCodecs: audioStreams.map { text($0, "codec_name") ?? "" },
+            audioChannelCounts: audioStreams.map { Int(text($0, "channels") ?? "") ?? 2 },
+            audioSampleRates: audioStreams.map { Int(text($0, "sample_rate") ?? "") ?? 0 },
+            audioBitrates: audioStreams.map { Int64(text($0, "bit_rate") ?? "") ?? 0 },
+            audioLanguages: audioStreams.map { stream in
+                switch stream.getTags()?["language"] {
+                case let value as NSString: return value as String
+                case let value as NSNumber: return value.stringValue
+                default: return ""
+                }
+            }
         )
     }
 
@@ -215,7 +249,9 @@ final class CastTranscoder {
     /// timing, but falls back to real when average is unknown ("0/0", common when duration
     /// metadata is missing).
     private static func frameRate(_ stream: StreamInformation?) -> Float {
-        for candidate in [stream?.getAverageFrameRate(), stream?.getRealFrameRate()] {
+        // Read through the same type-safe accessor as everything else: these are strings like
+        // "30000/1001" in practice, but they come from the identical unchecked dictionary.
+        for candidate in [text(stream, "avg_frame_rate"), text(stream, "r_frame_rate")] {
             guard let candidate, !candidate.isEmpty else { continue }
             let parts = candidate.split(separator: "/")
             if parts.count == 2, let num = Float(parts[0]), let den = Float(parts[1]), den > 0 {
