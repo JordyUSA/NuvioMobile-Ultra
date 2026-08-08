@@ -8,7 +8,15 @@ name: Runner probe
 # Deliberately not sharing build-ipa.yml's concurrency group, so probing cannot cancel a real
 # build in flight.
 
+# Triggered by pushing this file rather than by workflow_dispatch: dispatch only registers for
+# workflows that exist on the default branch, and this one is a throwaway living on a feature
+# branch. Deleted once it has answered the question.
 on:
+  push:
+    branches:
+      - claude/chromecast-ios-discovery-pwdryu
+    paths:
+      - '.github/workflows/runner-probe.yml'
   workflow_dispatch:
 
 concurrency:
