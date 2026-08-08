@@ -40,7 +40,7 @@ jobs:
     # depending on where the cap was set. There is no heap size that fits, which is why this
     # is a machine change rather than another round of tuning. The extra cores also cut the
     # build several-fold, so the higher per-minute rate buys far fewer minutes.
-    runs-on: macos-15-xlarge
+    runs-on: macos-14-xlarge
     # Kept generous rather than retuned for the faster machine: a ceiling exists to stop a
     # genuine hang short of GitHub's six-hour maximum, and one that never trips in normal
     # operation does that job fine.
