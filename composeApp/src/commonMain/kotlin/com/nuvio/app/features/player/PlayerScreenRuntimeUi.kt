@@ -17,9 +17,8 @@ import com.nuvio.app.features.cast.ui.castingAvailable
 import com.nuvio.app.features.cast.ui.CastDevicePickerDialog
 import com.nuvio.app.features.cast.ui.CastDeliveryEffect
 import com.nuvio.app.features.cast.ui.CastReceiver
-import com.nuvio.app.features.cast.ui.CastRemoteDialog
-import com.nuvio.app.features.cast.CastConnectionState
-import com.nuvio.app.features.cast.dlna.DlnaConnectionState
+import com.nuvio.app.features.cast.ui.rememberCastPlayback
+import com.nuvio.app.features.cast.ui.rememberCastTransportControls
 import com.nuvio.app.features.cast.CastStreamRequest
 import com.nuvio.app.features.cast.CastPlatform
 import com.nuvio.app.features.cast.dlna.DlnaPlatform
@@ -119,6 +118,29 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
             (bufferedSeconds / 10f).coerceIn(0f, 1f)
         }
     }
+    // While a receiver is connected the on-screen controls drive the television rather than
+    // the phone, so there is one set of controls rather than a second copy behind the cast
+    // button. Position, duration and play state all come from the receiver too, so the
+    // scrubber reflects what the television is actually doing.
+    val castControls = rememberCastTransportControls()
+    val castPlayback = rememberCastPlayback()
+    val effectiveSnapshot = if (castControls != null && castPlayback != null) {
+        playbackSnapshot.copy(
+            isLoading = castPlayback.isBuffering,
+            isPlaying = castPlayback.isPlaying,
+            isEnded = false,
+            durationMs = if (castPlayback.durationMs > 0) castPlayback.durationMs else playbackSnapshot.durationMs,
+            positionMs = castPlayback.positionMs,
+            // The receiver reports no buffer level, and a stale local one would draw a
+            // buffered bar that has nothing to do with the television.
+            bufferedPositionMs = castPlayback.positionMs,
+        )
+    } else {
+        playbackSnapshot
+    }
+    val effectiveDisplayedPositionMs = scrubbingPositionMs
+        ?: if (castControls != null && castPlayback != null) castPlayback.positionMs else displayedPositionMs
+
     val gestureCallbacks = rememberSurfaceGestureCallbacks()
 
     Box(
@@ -277,8 +299,8 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long, 
             seasonNumber = activeSeasonNumber,
             episodeNumber = activeEpisodeNumber,
             episodeTitle = activeEpisodeTitle,
-            playbackSnapshot = playbackSnapshot,
-            displayedPositionMs = displayedPositionMs,
+            playbackSnapshot = effectiveSnapshot,
+            displayedPositionMs = effectiveDisplayedPositionMs,
             metrics = metrics,
             resizeMode = resizeMode,
             isLocked = playerControlsLocked,
@@ -296,9 +318,32 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long, 
                 flushWatchProgress()
                 args.onBack()
             },
-            onTogglePlayback = { togglePlayback() },
-            onSeekBack = { seekBy(-10_000L) },
-            onSeekForward = { seekBy(10_000L) },
+            onTogglePlayback = {
+                val controls = castControls
+                if (controls != null) {
+                    if (castPlayback?.isPlaying == true) controls.pause() else controls.play()
+                } else {
+                    togglePlayback()
+                }
+            },
+            onSeekBack = {
+                val controls = castControls
+                if (controls != null) {
+                    controls.seekTo(((castPlayback?.positionMs ?: 0L) - 10_000L).coerceAtLeast(0L))
+                } else {
+                    seekBy(-10_000L)
+                }
+            },
+            onSeekForward = {
+                val controls = castControls
+                if (controls != null) {
+                    val duration = castPlayback?.durationMs ?: 0L
+                    val target = (castPlayback?.positionMs ?: 0L) + 10_000L
+                    controls.seekTo(if (duration > 0) target.coerceAtMost(duration) else target)
+                } else {
+                    seekBy(10_000L)
+                }
+            },
             onResizeModeClick = { cycleResizeMode() },
             onSpeedClick = { cyclePlaybackSpeed() },
             onSubtitleClick = if (isLiveTv) null else {
@@ -390,8 +435,13 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long, 
             onScrubFinished = { positionMs ->
                 isScrubbingTimeline = false
                 scrubbingPositionMs = null
-                playerController?.seekTo(positionMs)
-                scheduleProgressSyncAfterSeek()
+                val controls = castControls
+                if (controls != null) {
+                    controls.seekTo(positionMs)
+                } else {
+                    playerController?.seekTo(positionMs)
+                    scheduleProgressSyncAfterSeek()
+                }
             },
             horizontalSafePadding = horizontalSafePadding,
             modifier = Modifier.fillMaxSize(),
@@ -762,27 +812,11 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
 private fun PlayerScreenRuntime.RenderCastPicker() {
     if (!castingAvailable) return
 
-    val castConnection by CastPlatform.connection.collectAsState()
-    val dlnaConnection by DlnaPlatform.connection.collectAsState()
-    val isCasting = castConnection is CastConnectionState.Connected ||
-        dlnaConnection is DlnaConnectionState.Connected
-
-    // Once a receiver is connected the cast button reaches the remote instead of the picker,
-    // which is where the controls live; switching device goes back to the list.
-    var forcePicker by remember { mutableStateOf(false) }
-    LaunchedEffect(isCasting) { if (!isCasting) forcePicker = false }
-
-    if (showCastPicker && isCasting && !forcePicker) {
-        CastRemoteDialog(
-            onDismiss = { showCastPicker = false },
-            onSwitchDevice = { forcePicker = true },
-        )
-    } else if (showCastPicker) {
+    // The cast button is only device management now — pick, switch or stop. Playback controls
+    // while casting are the player's own, driven straight at the receiver.
+    if (showCastPicker) {
         CastDevicePickerDialog(
-            onDismiss = {
-                showCastPicker = false
-                forcePicker = false
-            },
+            onDismiss = { showCastPicker = false },
             onDeviceSelected = { receiver ->
                 // Stop the phone before the television starts, not after delivery finishes.
                 // Probing and any remux or transcode sit between those two moments, and for
@@ -793,7 +827,6 @@ private fun PlayerScreenRuntime.RenderCastPicker() {
                     is CastReceiver.Dlna -> DlnaPlatform.connect(receiver.device)
                 }
                 showCastPicker = false
-                forcePicker = false
             },
         )
     }

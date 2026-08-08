@@ -1,7 +1,6 @@
 package com.nuvio.app.features.cast.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -107,6 +106,8 @@ fun CastDevicePickerDialog(
     val castConnection by CastPlatform.connection.collectAsState()
     val dlnaConnection by DlnaPlatform.connection.collectAsState()
     val discoveryDiagnostic by CastPlatform.discoveryDiagnostic.collectAsState()
+    val transportControls = rememberCastTransportControls()
+    val receiverPlayback = rememberCastPlayback()
     var showDiagnostics by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
@@ -206,6 +207,23 @@ fun CastDevicePickerDialog(
                         }
                     }
                 }
+                if (connectedName != null) {
+                    // Transport — play, pause, skip, scrub — lives in the player's own
+                    // controls while casting, so it is deliberately not repeated here. The
+                    // receiver's volume has nowhere else to go, so it stays with the device.
+                    Spacer(Modifier.height(8.dp))
+                    Text("TV volume", style = MaterialTheme.typography.bodySmall)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = {
+                            transportControls?.setMuted(!(receiverPlayback?.isMuted ?: false))
+                        }) { Text(if (receiverPlayback?.isMuted == true) "Unmute" else "Mute") }
+                        Slider(
+                            value = (receiverPlayback?.volume ?: 1f).coerceIn(0f, 1f),
+                            onValueChange = { transportControls?.setVolume(it) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
                 failureMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         },
@@ -293,7 +311,7 @@ fun CastDiagnosticsDialog(onDismiss: () -> Unit) {
  * The active receiver's transport, so the remote can drive whichever one is connected without
  * every caller branching. Chromecast and DLNA expose the same control surface.
  */
-private interface CastTransportControls {
+interface CastTransportControls {
     val playback: StateFlow<CastPlaybackState?>
     fun play()
     fun pause()
@@ -303,7 +321,7 @@ private interface CastTransportControls {
     fun disconnect()
 }
 
-private val chromecastControls = object : CastTransportControls {
+internal val chromecastControls = object : CastTransportControls {
     override val playback get() = CastPlatform.playback
     override fun play() = CastPlatform.play()
     override fun pause() = CastPlatform.pause()
@@ -313,7 +331,7 @@ private val chromecastControls = object : CastTransportControls {
     override fun disconnect() = CastPlatform.disconnect()
 }
 
-private val dlnaControls = object : CastTransportControls {
+internal val dlnaControls = object : CastTransportControls {
     override val playback get() = DlnaPlatform.playback
     override fun play() = DlnaPlatform.play()
     override fun pause() = DlnaPlatform.pause()
@@ -324,134 +342,39 @@ private val dlnaControls = object : CastTransportControls {
 }
 
 /**
- * The phone as a remote for whatever is playing on the television.
+ * The connected receiver's controls, or null when nothing is casting.
  *
- * Shown in place of the picker once a receiver is connected: reopening the cast button while
- * casting is how you reach the controls, which is what every other casting app does and what
- * the picker alone could not offer.
+ * Exposed so the player can point its own transport buttons at the television instead of
+ * offering a second set somewhere else: while a receiver is connected the on-screen controls
+ * drive it, and the phone is only the remote.
  */
 @Composable
-fun CastRemoteDialog(
-    onDismiss: () -> Unit,
-    onSwitchDevice: () -> Unit,
-) {
+fun rememberCastTransportControls(): CastTransportControls? {
     val castConnection by CastPlatform.connection.collectAsState()
     val dlnaConnection by DlnaPlatform.connection.collectAsState()
-
-    val castDevice = (castConnection as? CastConnectionState.Connected)?.device
-    val dlnaDevice = (dlnaConnection as? DlnaConnectionState.Connected)?.device
-    val controls = if (castDevice != null) chromecastControls else dlnaControls
-    val deviceName = castDevice?.name ?: dlnaDevice?.name ?: "your TV"
-
-    val playback by controls.playback.collectAsState()
-    val status = playback
-
-    // While a finger is down the slider follows it, not the receiver: status updates arrive
-    // every second or so and would otherwise yank the thumb back mid-drag.
-    var scrubbingTo by remember { mutableStateOf<Float?>(null) }
-    val durationMs = status?.durationMs ?: 0L
-    val positionMs = status?.positionMs ?: 0L
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Casting to $deviceName") },
-        text = {
-            Column {
-                status?.title?.let {
-                    Text(it, style = MaterialTheme.typography.bodyLarge)
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                when {
-                    status == null -> Text("Nothing is loaded on the TV yet.")
-                    status.isBuffering -> Text("Buffering…", style = MaterialTheme.typography.bodySmall)
-                    else -> Text(
-                        "${formatTime(scrubbingTo?.toLong() ?: positionMs)} / ${formatTime(durationMs)}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-
-                // A live stream has no meaningful duration, so there is nothing to scrub over.
-                if (durationMs > 0) {
-                    Slider(
-                        value = (scrubbingTo ?: positionMs.toFloat()).coerceIn(0f, durationMs.toFloat()),
-                        onValueChange = { scrubbingTo = it },
-                        onValueChangeFinished = {
-                            scrubbingTo?.let { controls.seekTo(it.toLong()) }
-                            scrubbingTo = null
-                        },
-                        valueRange = 0f..durationMs.toFloat(),
-                    )
-                }
-
-                // Transport commands need a media session on the receiver. Sent without one
-                // they come back as INVALID_REQUEST and the SDK complains about being called
-                // with no media status, so the controls are simply inert until media loads.
-                val hasMedia = status != null
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(
-                        enabled = hasMedia,
-                        onClick = { controls.seekTo((positionMs - 10_000).coerceAtLeast(0L)) },
-                    ) { Text("−10s") }
-
-                    TextButton(
-                        enabled = hasMedia,
-                        onClick = { if (status?.isPlaying == true) controls.pause() else controls.play() },
-                    ) { Text(if (status?.isPlaying == true) "Pause" else "Play") }
-
-                    TextButton(
-                        enabled = hasMedia,
-                        onClick = {
-                            val target = positionMs + 10_000
-                            controls.seekTo(if (durationMs > 0) target.coerceAtMost(durationMs) else target)
-                        },
-                    ) { Text("+10s") }
-                }
-
-                Spacer(Modifier.height(4.dp))
-                Text("Volume", style = MaterialTheme.typography.bodySmall)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = {
-                        controls.setMuted(!(status?.isMuted ?: false))
-                    }) { Text(if (status?.isMuted == true) "Unmute" else "Mute") }
-                    Slider(
-                        value = (status?.volume ?: 1f).coerceIn(0f, 1f),
-                        onValueChange = { controls.setVolume(it) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                CastDelivery.cancel()
-                controls.disconnect()
-                onDismiss()
-            }) { Text("Stop casting") }
-        },
-        dismissButton = {
-            Row {
-                TextButton(onClick = onSwitchDevice) { Text("Switch device") }
-                TextButton(onClick = onDismiss) { Text("Close") }
-            }
-        },
-    )
+    return remember(castConnection, dlnaConnection) {
+        when {
+            castConnection is CastConnectionState.Connected -> chromecastControls
+            dlnaConnection is DlnaConnectionState.Connected -> dlnaControls
+            else -> null
+        }
+    }
 }
 
-/** `h:mm:ss` past an hour, `m:ss` below it. Milliseconds in, never negative out. */
-private fun formatTime(millis: Long): String {
-    val total = (millis / 1000).coerceAtLeast(0L)
-    val hours = total / 3600
-    val minutes = (total % 3600) / 60
-    val seconds = total % 60
-    return if (hours > 0) {
-        "$hours:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
-    } else {
-        "$minutes:${seconds.toString().padStart(2, '0')}"
+/**
+ * What the connected receiver reports it is doing, or null when nothing is casting or nothing
+ * has loaded yet. Both transports are collected unconditionally — a composable cannot be called
+ * from inside a branch — and the connected one is chosen from the result.
+ */
+@Composable
+fun rememberCastPlayback(): CastPlaybackState? {
+    val controls = rememberCastTransportControls()
+    val chromecast by CastPlatform.playback.collectAsState()
+    val dlna by DlnaPlatform.playback.collectAsState()
+    return when (controls) {
+        chromecastControls -> chromecast
+        dlnaControls -> dlna
+        else -> null
     }
 }
 
