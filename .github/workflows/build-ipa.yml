@@ -84,9 +84,11 @@ jobs:
     # thrashes: the release link took 1h20m on the run that passed and then stopped finishing
     # at all, producing no output for five and a half hours before the job timed out.
     #
-    # These values fit the runner. The phases are sequential, so the peaks do not add up:
-    # Gradle + the Kotlin daemon during compilation (~3.5 GB), Gradle + the native compiler
-    # during linking (~5.5 GB), both comfortably inside physical memory.
+    # The release linker's real appetite has been bracketed by experiment: 16 GB let it grow
+    # into swap and stall forever, 4 GB made it die instantly with OutOfMemoryError. So it
+    # needs more than 4 GB of live heap and the budget here is 7 GB of physical RAM, most of
+    # which has to go to the linker — everything else is squeezed to the minimum that still
+    # works, and parallelism is off so no second worker competes for the same memory.
     #
     # GRADLE_USER_HOME/gradle.properties outranks the project's own file, so this overrides
     # the workstation values without touching them for local development.
@@ -94,10 +96,10 @@ jobs:
       run: |
         mkdir -p ~/.gradle
         cat >> ~/.gradle/gradle.properties <<'EOF'
-        org.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8
-        kotlin.daemon.jvmargs=-Xmx2g
-        kotlin.native.jvmArgs=-Xmx4g
-        org.gradle.workers.max=2
+        org.gradle.jvmargs=-Xmx1g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8
+        kotlin.daemon.jvmargs=-Xmx1200m
+        kotlin.native.jvmArgs=-Xmx5g
+        org.gradle.workers.max=1
         EOF
         cat ~/.gradle/gradle.properties
 
