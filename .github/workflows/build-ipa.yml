@@ -34,16 +34,13 @@ concurrency:
 
 jobs:
   build:
-    # 12 cores and 30 GB, against macos-latest's 3 cores and 7 GB. The small runner could not
-    # link the Kotlin/Native release framework at all: 7 GB is less than the linker's live
-    # heap, so it either grew into swap and stalled for hours or died with OutOfMemoryError,
-    # depending on where the cap was set. There is no heap size that fits, which is why this
-    # is a machine change rather than another round of tuning. The extra cores also cut the
-    # build several-fold, so the higher per-minute rate buys far fewer minutes.
-    runs-on: macos-14-xlarge
-    # Kept generous rather than retuned for the faster machine: a ceiling exists to stop a
-    # genuine hang short of GitHub's six-hour maximum, and one that never trips in normal
-    # operation does that job fine.
+    runs-on: macos-latest
+    # This build legitimately takes two to three hours, but without a ceiling a hang would
+    # burn the full six-hour maximum before GitHub intervenes. 240 was too tight: a healthy
+    # run is ~2h45m (1h25m linking the Kotlin framework, 1h18m in xcodebuild), leaving barely
+    # an hour of slack, and a slow runner ate all of it — one run reached three hours still
+    # linking, which meant the archive step could not have finished inside the ceiling no
+    # matter what. Still well under the six-hour maximum, so a genuine hang is still caught.
     timeout-minutes: 330
 
     env:
@@ -80,9 +77,31 @@ jobs:
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
 
-    # No heap overrides here. gradle.properties asks for a 12 GB Gradle daemon, an 8 GB Kotlin
-    # daemon and a 16 GB Kotlin/Native compiler, which is what this 30 GB runner is for. Those
-    # numbers were the whole problem on the 7 GB machine and are correct on this one.
+    # The repository's gradle.properties is tuned for a developer workstation: it asks for a
+    # 12 GB Gradle daemon, an 8 GB Kotlin daemon and a 16 GB Kotlin/Native compiler. A
+    # macos-latest runner has 7 GB of RAM and 3 cores. Those ceilings do not fail loudly —
+    # they let the native linker's heap grow into swap instead of collecting, and the machine
+    # thrashes: the release link took 1h20m on the run that passed and then stopped finishing
+    # at all, producing no output for five and a half hours before the job timed out.
+    #
+    # The release linker's real appetite has been bracketed by experiment: 16 GB let it grow
+    # into swap and stall forever, 4 GB made it die instantly with OutOfMemoryError. So it
+    # needs more than 4 GB of live heap and the budget here is 7 GB of physical RAM, most of
+    # which has to go to the linker — everything else is squeezed to the minimum that still
+    # works, and parallelism is off so no second worker competes for the same memory.
+    #
+    # GRADLE_USER_HOME/gradle.properties outranks the project's own file, so this overrides
+    # the workstation values without touching them for local development.
+    - name: Size the JVMs for a 7 GB runner
+      run: |
+        mkdir -p ~/.gradle
+        cat >> ~/.gradle/gradle.properties <<'EOF'
+        org.gradle.jvmargs=-Xmx1g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8
+        kotlin.daemon.jvmargs=-Xmx1200m
+        kotlin.native.jvmArgs=-Xmx5g
+        org.gradle.workers.max=1
+        EOF
+        cat ~/.gradle/gradle.properties
 
     # The Kotlin/Native toolchain — compiler, LLVM and sysroots — is a multi-gigabyte download
     # that setup-gradle's cache does not cover, so it is fetched from scratch on every run.
@@ -101,9 +120,9 @@ jobs:
     # which would otherwise bury compiler errors inside the Gradle build-phase log.
     # Capped well under the job ceiling on purpose: this step is where a memory-starved
     # native link stalls, and a stall here used to consume the entire job budget before
-    # anything reported it. With enough RAM the link is minutes, so overrunning this means
-    # memory is short again — worth failing fast to say so rather than paying for hours of a
-    # runner that bills at the highest rate on offer.
+    # anything reported it. With the heaps sized correctly the link is minutes, not hours,
+    # so overrunning this means the machine is thrashing again — worth failing fast to say so
+    # rather than paying for another five-hour runner.
     - name: Compile Kotlin iOS framework
       timeout-minutes: 90
       run: ./gradlew :composeApp:linkReleaseFrameworkIosArm64
