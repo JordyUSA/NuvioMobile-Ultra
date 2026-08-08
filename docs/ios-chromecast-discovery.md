@@ -1,5 +1,32 @@
 # iOS Chromecast discovery — every way the device list can stay empty
 
+## The one that actually happened
+
+Discovery was broken from the moment the Cast SDK was added, and none of the usual suspects
+below were responsible. `GoogleCast.framework` is a **static** library, and Xcode does not copy
+resources out of static frameworks — CocoaPods does, which is why Google's own sample works and
+this hand-integrated xcframework did not. The app's Copy Bundle Resources phase was empty and
+the project contained no `.bundle` reference at all, so the SDK shipped without any of its seven
+resource bundles. At launch it said so, once, and then went quiet:
+
+```
+CoreData model CastFrameworkDB.momd not found at (null)
+Can't initialize database because the model can't be found in bundle, aborting
+```
+
+After that, `startDiscovery` produced no SDK output whatsoever, even at
+`GCKLoggerLevelVerbose` — not a failed scan, no scan at all — while a plain `NWBrowser` on the
+same service found the receiver immediately. That gap between "the OS sees it" and "the SDK
+says nothing" is the signature of this bug, and it is worth checking first, because every
+symptom below looks identical from the outside.
+
+The fix is the `Copy Google Cast Resources` build phase in `build-ipa.yml`'s Xcode project,
+which copies every `*.bundle` from the slice matching the platform being built. If Cast ever
+goes silent again after an SDK upgrade, confirm those bundles are still in the built `.app`
+before investigating anything else.
+
+
+
 Chromecast discovery on iOS fails *silently* by design: when any layer blocks it, nothing
 throws, no callback fires with an error, and the picker just never lists a device. This is the
 complete map of those layers, ordered from "in this repo" to "in the user's hands", with the
