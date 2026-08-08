@@ -1,0 +1,36 @@
+name: Runner probe
+
+# Throwaway diagnostic: which GitHub-hosted macOS runner labels will this account actually
+# schedule, and how much memory does each really have? A label the plan does not cover fails
+# in about a second with no runner assigned, so this answers in seconds what would otherwise
+# cost a three-hour build to discover.
+#
+# Deliberately not sharing build-ipa.yml's concurrency group, so probing cannot cancel a real
+# build in flight.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: runner-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        label:
+          - macos-latest
+          - macos-15-large
+          - macos-latest-large
+          - macos-latest-xlarge
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 5
+    steps:
+      - name: Report the machine
+        run: |
+          echo "label:  ${{ matrix.label }}"
+          echo "cores:  $(sysctl -n hw.ncpu)"
+          echo "memory: $(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 )) GB"
+          echo "arch:   $(uname -m)"
