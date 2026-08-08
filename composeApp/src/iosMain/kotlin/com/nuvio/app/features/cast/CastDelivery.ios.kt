@@ -82,7 +82,9 @@ actual object CastDelivery {
             "Deliver",
             "plan=${plan.mode} container=${plan.targetContainer} " +
                 "localServer=${plan.requiresLocalServer} reachable=${request.sourceReachableByReceiver} " +
-                "video=${probe?.videoCodec ?: "?"} audio=${probe?.audioCodecs?.firstOrNull() ?: "?"} " +
+                "video=${probe?.video?.codec ?: "?"}@${probe?.video?.width}x${probe?.video?.height} " +
+                "audio=${probe?.primaryAudio?.codec ?: "?"}/${probe?.primaryAudio?.channelCount ?: 0}ch " +
+                "audioTracks=${probe?.audioTracks?.size ?: 0} " +
                 "reasons=${plan.reasons.joinToString(",") { it::class.simpleName ?: "?" }}",
         )
 
