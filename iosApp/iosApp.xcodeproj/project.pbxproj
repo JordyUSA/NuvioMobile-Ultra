@@ -226,6 +226,7 @@
 				0A1B2C3D4E5F60718293A4BC /* Embed App Extensions */,
 				2DAFDB313E32F227766A2072 /* Resources */,
 				4D8F7A1B9C2E43F0A6B5D812 /* Copy Compose Resources */,
+				7F3C0A9E5B14D2860C71A4E9 /* Copy Google Cast Resources */,
 			);
 			buildRules = (
 			);
@@ -339,6 +340,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "set -e\ncase \"$PLATFORM_NAME\" in\n  iphonesimulator)\n    RESOURCE_SRC=\"$SRCROOT/../composeApp/build/kotlin-multiplatform-resources/aggregated-resources/iosSimulatorArm64/composeResources\"\n    ;;\n  *)\n    RESOURCE_SRC=\"$SRCROOT/../composeApp/build/kotlin-multiplatform-resources/aggregated-resources/iosArm64/composeResources\"\n    ;;\nesac\nRESOURCE_DST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/compose-resources/composeResources\"\nif [ ! -d \"$RESOURCE_SRC\" ]; then\n  echo \"error: Compose resources not found at $RESOURCE_SRC\"\n  exit 1\nfi\nrm -rf \"$RESOURCE_DST\"\nmkdir -p \"$RESOURCE_DST\"\n/usr/bin/ditto \"$RESOURCE_SRC\" \"$RESOURCE_DST\"\n";
+		};
+		7F3C0A9E5B14D2860C71A4E9 /* Copy Google Cast Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Google Cast Resources";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\ncase \"$PLATFORM_NAME\" in\n  iphonesimulator)\n    CAST_SLICE=\"ios-arm64_x86_64-simulator\"\n    ;;\n  *)\n    CAST_SLICE=\"ios-arm64\"\n    ;;\nesac\nCAST_SRC=\"$SRCROOT/Frameworks/GoogleCast.xcframework/$CAST_SLICE/GoogleCast.framework\"\nCAST_DST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nif [ ! -d \"$CAST_SRC\" ]; then\n  echo \"error: GoogleCast slice not found at $CAST_SRC\"\n  exit 1\nfi\ncopied=0\nfor bundle in \"$CAST_SRC\"/*.bundle; do\n  [ -d \"$bundle\" ] || continue\n  name=\"$(basename \"$bundle\")\"\n  rm -rf \"$CAST_DST/$name\"\n  /usr/bin/ditto \"$bundle\" \"$CAST_DST/$name\"\n  copied=$((copied + 1))\ndone\nif [ \"$copied\" -eq 0 ]; then\n  echo \"error: no GoogleCast resource bundles found in $CAST_SRC\"\n  exit 1\nfi\necho \"Copied $copied GoogleCast resource bundle(s) into the app\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

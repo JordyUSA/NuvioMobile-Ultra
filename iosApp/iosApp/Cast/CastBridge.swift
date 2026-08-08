@@ -53,15 +53,17 @@ final class CastBridge: NSObject, CastIosBridge {
     static func install() -> CastBridge? {
         let criteria = GCKDiscoveryCriteria(applicationID: receiverApplicationID)
         let options = GCKCastOptions(discoveryCriteria: criteria)
-        // Discovery must be fully manual — started when the picker opens, stopped when it
-        // closes. startDiscoveryAfterFirstTapOnCastButton=false alone does not do that: it
-        // defers to disableDiscoveryAutostart, whose default (false) starts discovery the
-        // moment the context is created. That put iOS's one-shot Local Network permission
-        // prompt on the launch screen, where "Don't Allow" is the reflexive answer — and a
-        // denial leaves discovery returning empty lists forever with no error. Both flags
-        // together keep the browse, and therefore the prompt, inside the picker where the
-        // user can see why they're being asked.
-        options.disableDiscoveryAutostart = true
+        // Autostart is left on, which is what Google's reference sender does and what the
+        // SDK defaults to. It was disabled here once, to keep iOS's one-shot Local Network
+        // prompt out of the launch screen, but that traded a real problem for a worse one:
+        // with autostart off the SDK reported no devices and logged nothing whatsoever at
+        // verbose level, not even an attempt, while the OS's own mDNS browse could see the
+        // receiver. GCKCastOptions' own documentation notes that the iOS 14-and-later path
+        // expects this flag to be NO, so it is set explicitly rather than left implicit.
+        options.disableDiscoveryAutostart = false
+        // Still false: this one gates discovery on the user tapping a GCKUICastButton, and
+        // this app has its own picker rather than the SDK's button, so nothing would ever
+        // ungate it.
         options.startDiscoveryAfterFirstTapOnCastButton = false
         options.suspendSessionsWhenBackgrounded = false
         GCKCastContext.setSharedInstanceWith(options)
