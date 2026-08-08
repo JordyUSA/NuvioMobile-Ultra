@@ -118,29 +118,6 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
             (bufferedSeconds / 10f).coerceIn(0f, 1f)
         }
     }
-    // While a receiver is connected the on-screen controls drive the television rather than
-    // the phone, so there is one set of controls rather than a second copy behind the cast
-    // button. Position, duration and play state all come from the receiver too, so the
-    // scrubber reflects what the television is actually doing.
-    val castControls = rememberCastTransportControls()
-    val castPlayback = rememberCastPlayback()
-    val effectiveSnapshot = if (castControls != null && castPlayback != null) {
-        playbackSnapshot.copy(
-            isLoading = castPlayback.isBuffering,
-            isPlaying = castPlayback.isPlaying,
-            isEnded = false,
-            durationMs = if (castPlayback.durationMs > 0) castPlayback.durationMs else playbackSnapshot.durationMs,
-            positionMs = castPlayback.positionMs,
-            // The receiver reports no buffer level, and a stale local one would draw a
-            // buffered bar that has nothing to do with the television.
-            bufferedPositionMs = castPlayback.positionMs,
-        )
-    } else {
-        playbackSnapshot
-    }
-    val effectiveDisplayedPositionMs = scrubbingPositionMs
-        ?: if (castControls != null && castPlayback != null) castPlayback.positionMs else displayedPositionMs
-
     val gestureCallbacks = rememberSurfaceGestureCallbacks()
 
     Box(
@@ -281,6 +258,29 @@ private fun PlayerScreenRuntime.currentInitialPositionRequestKey(): String? {
 
 @Composable
 private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long, isEpisode: Boolean) {
+    // While a receiver is connected the on-screen controls drive the television rather than
+    // the phone, so there is one set of controls rather than a second copy behind the cast
+    // button. Position, duration and play state all come from the receiver too, so the
+    // scrubber reflects what the television is actually doing.
+    val castControls = rememberCastTransportControls()
+    val castPlayback = rememberCastPlayback()
+    val effectiveSnapshot = if (castControls != null && castPlayback != null) {
+        playbackSnapshot.copy(
+            isLoading = castPlayback.isBuffering,
+            isPlaying = castPlayback.isPlaying,
+            isEnded = false,
+            durationMs = if (castPlayback.durationMs > 0) castPlayback.durationMs else playbackSnapshot.durationMs,
+            positionMs = castPlayback.positionMs,
+            // The receiver reports no buffer level, and a stale local one would draw a
+            // buffered bar that has nothing to do with the television.
+            bufferedPositionMs = castPlayback.positionMs,
+        )
+    } else {
+        playbackSnapshot
+    }
+    val effectiveDisplayedPositionMs = scrubbingPositionMs
+        ?: if (castControls != null && castPlayback != null) castPlayback.positionMs else displayedPositionMs
+
     val showQuietDeviceStatusOverlay = nuvioEnhancedSettingsUiState.playerStatusOverlayEnabled &&
         !controlsVisible &&
         !showParentalGuide &&
