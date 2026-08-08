@@ -8,10 +8,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.nuvio.app.features.cast.ui.castingAvailable
 import com.nuvio.app.features.cast.ui.CastDevicePickerDialog
 import com.nuvio.app.features.cast.ui.CastDeliveryEffect
 import com.nuvio.app.features.cast.ui.CastReceiver
+import com.nuvio.app.features.cast.ui.CastRemoteDialog
+import com.nuvio.app.features.cast.CastConnectionState
+import com.nuvio.app.features.cast.dlna.DlnaConnectionState
 import com.nuvio.app.features.cast.CastStreamRequest
 import com.nuvio.app.features.cast.CastPlatform
 import com.nuvio.app.features.cast.dlna.DlnaPlatform
@@ -754,21 +762,47 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
 private fun PlayerScreenRuntime.RenderCastPicker() {
     if (!castingAvailable) return
 
-    if (showCastPicker) {
-        CastDevicePickerDialog(
+    val castConnection by CastPlatform.connection.collectAsState()
+    val dlnaConnection by DlnaPlatform.connection.collectAsState()
+    val isCasting = castConnection is CastConnectionState.Connected ||
+        dlnaConnection is DlnaConnectionState.Connected
+
+    // Once a receiver is connected the cast button reaches the remote instead of the picker,
+    // which is where the controls live; switching device goes back to the list.
+    var forcePicker by remember { mutableStateOf(false) }
+    LaunchedEffect(isCasting) { if (!isCasting) forcePicker = false }
+
+    if (showCastPicker && isCasting && !forcePicker) {
+        CastRemoteDialog(
             onDismiss = { showCastPicker = false },
+            onSwitchDevice = { forcePicker = true },
+        )
+    } else if (showCastPicker) {
+        CastDevicePickerDialog(
+            onDismiss = {
+                showCastPicker = false
+                forcePicker = false
+            },
             onDeviceSelected = { receiver ->
+                // Stop the phone before the television starts, not after delivery finishes.
+                // Probing and any remux or transcode sit between those two moments, and for
+                // that whole stretch both screens were playing the same title seconds apart.
+                playerController?.pause()
                 when (receiver) {
                     is CastReceiver.Chromecast -> CastPlatform.connect(receiver.device)
                     is CastReceiver.Dlna -> DlnaPlatform.connect(receiver.device)
                 }
                 showCastPicker = false
+                forcePicker = false
             },
         )
     }
 
-    // Local playback and Cast playback must not run at once, so pause the phone once the
-    // television has taken over.
+    // Belt and braces for the sessions the user did not start from the picker: the Cast SDK
+    // resumes a previous session by itself at launch, and the phone must not keep playing
+    // underneath that either.
+    LaunchedEffect(isCasting) { if (isCasting) playerController?.pause() }
+
     val castRequest = remember(sourceUrl, title, activeStreamTitle) {
         CastStreamRequest(
             url = sourceUrl,
@@ -788,12 +822,23 @@ private fun PlayerScreenRuntime.RenderCastPicker() {
 }
 
 /**
- * Whether a Chromecast could fetch this URL itself. Loopback belongs to the phone, private
- * hosts may not be routable from the television, and an origin needing request headers cannot
- * be handed over directly.
+ * Whether a Chromecast could fetch this URL itself. Loopback belongs to the phone, so a source
+ * there always has to be proxied; a LAN address is fine, because the receiver is on the same
+ * network by definition.
+ *
+ * Worth getting right rather than answering "no" cheaply: every source the receiver fetches by
+ * itself is one the phone does not have to stay awake serving, which is the difference between
+ * casting that survives being backgrounded and casting that stalls the moment you switch apps.
  */
 private fun isReceiverReachable(url: String, headers: Map<String, String>): Boolean {
-    if (headers.isNotEmpty()) return false
+    // Headers the receiver cannot be given. Chromecast's media load carries no request headers,
+    // so anything that actually authenticates the fetch forces the stream through the phone.
+    // A User-Agent or Accept is not that: origins serve fine without them, and treating them as
+    // disqualifying sent plenty of perfectly fetchable links down the proxy path for nothing.
+    val essentialHeaders = headers.keys.filterNot {
+        it.equals("User-Agent", ignoreCase = true) || it.equals("Accept", ignoreCase = true)
+    }
+    if (essentialHeaders.isNotEmpty()) return false
     val host = url.substringAfter("://", "").substringBefore('/').substringBefore(':').lowercase()
     return host.isNotEmpty() &&
         host != "localhost" &&

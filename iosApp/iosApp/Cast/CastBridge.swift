@@ -72,11 +72,17 @@ final class CastBridge: NSObject, CastIosBridge {
 
         // Google's documented debugging path: without this delegate the SDK's discovery
         // failures — permission refusals, socket errors, dead browses — are discarded, and an
-        // empty device list is indistinguishable from a healthy empty network. Verbose, on
-        // purpose: every line also lands in CastDiagnostics, the in-app console the user can
-        // copy out of the device picker, because a sideloaded install has no Console.app.
+        // empty device list is indistinguishable from a healthy empty network. Every line also
+        // lands in CastDiagnostics, the in-app console the user can copy out of the picker,
+        // because a sideloaded install has no Console.app.
+        //
+        // Warnings and above, not verbose. At verbose the SDK narrates every socket read and
+        // media status update during playback, and each line crosses into Kotlin on the main
+        // thread; that flood was enough to hang the UI and get the app watchdog-killed while
+        // casting. Raise this one line back to .verbose to get the full discovery trace when
+        // something needs diagnosing again.
         let logFilter = GCKLoggerFilter()
-        logFilter.minimumLevel = .verbose
+        logFilter.minimumLevel = .warning
         GCKLogger.sharedInstance().filter = logFilter
         GCKLogger.sharedInstance().delegate = bridge
 
@@ -189,6 +195,18 @@ final class CastBridge: NSObject, CastIosBridge {
         onMain {
             guard let device = self.knownDevices[deviceId] else {
                 CastDiagnostics.shared.log(tag: "Cast", message: "connect: unknown device id \(deviceId)")
+                return
+            }
+            // Already on this receiver: starting a second session tears the first one down and
+            // interrupts whatever is playing. Reopening the picker while connected is the
+            // obvious way to reach the remote, so treat a repeat pick as a no-op and just
+            // re-report the session that already exists.
+            if let current = self.sessionManager.currentCastSession,
+               current.device.deviceID == deviceId {
+                CastDiagnostics.shared.log(tag: "Cast", message: "already connected to \(device.friendlyName ?? deviceId)")
+                CastPlatform.shared.onConnectionChanged(
+                    state: 2, device: self.describe(current), message: nil
+                )
                 return
             }
             CastDiagnostics.shared.log(tag: "Cast", message: "connect → \(device.friendlyName ?? deviceId)")

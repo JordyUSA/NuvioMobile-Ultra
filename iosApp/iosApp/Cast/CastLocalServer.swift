@@ -96,6 +96,7 @@ final class CastLocalServer {
         routesLock.lock()
         routes.removeAll()
         routesLock.unlock()
+        CastKeepAlive.shared.releaseAll()
     }
 
     /// Publishes `payload` and returns the URL to hand the receiver, or nil when no usable LAN
@@ -103,16 +104,20 @@ final class CastLocalServer {
     func publish(id: String, payload: Payload) -> String? {
         guard start() else { return nil }
         routesLock.lock()
-        routes[id] = payload
+        let isNew = routes.updateValue(payload, forKey: id) == nil
         routesLock.unlock()
+        // Serving means the television is pulling bytes out of this process, so the process
+        // has to keep running even when the user switches away. Balanced in unpublish/stop.
+        if isNew { CastKeepAlive.shared.retain() }
         guard let host = Self.localAddress() else { return nil }
         return "http://\(host):\(port)/media/\(id)"
     }
 
     func unpublish(id: String) {
         routesLock.lock()
-        routes.removeValue(forKey: id)
+        let existed = routes.removeValue(forKey: id) != nil
         routesLock.unlock()
+        if existed { CastKeepAlive.shared.release() }
     }
 
     /// The phone's Wi-Fi address. Loopback is useless here: it has to be an address the

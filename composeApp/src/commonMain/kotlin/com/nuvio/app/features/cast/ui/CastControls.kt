@@ -1,6 +1,7 @@
 package com.nuvio.app.features.cast.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +14,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -36,6 +38,7 @@ import com.nuvio.app.features.cast.CastDeliveryStatus
 import com.nuvio.app.features.cast.CastDevice
 import com.nuvio.app.features.cast.CastDiagnostics
 import com.nuvio.app.features.cast.CastIncompatibility
+import com.nuvio.app.features.cast.CastPlaybackState
 import com.nuvio.app.features.cast.CastPlatform
 import com.nuvio.app.features.cast.CastStreamRequest
 import com.nuvio.app.features.cast.CastTransport
@@ -45,6 +48,7 @@ import com.nuvio.app.features.cast.dlna.DlnaConnectionState
 import com.nuvio.app.features.cast.dlna.DlnaDevice
 import com.nuvio.app.features.cast.dlna.DlnaPlatform
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Whether the Cast affordance should be shown at all.
@@ -244,6 +248,14 @@ fun CastDiagnosticsDialog(onDismiss: () -> Unit) {
         title = { Text("Cast diagnostics") },
         text = {
             val scroll = rememberScrollState()
+            // Snapshots are published at a rate limit, so the tail of a burst can sit in the
+            // buffer unshown. Pull it while the viewer is open.
+            LaunchedEffect(Unit) {
+                while (true) {
+                    delay(400)
+                    CastDiagnostics.flush()
+                }
+            }
             // Keep the newest lines in view as they arrive.
             LaunchedEffect(lines.size) { scroll.scrollTo(scroll.maxValue) }
             SelectionContainer {
@@ -275,6 +287,163 @@ fun CastDiagnosticsDialog(onDismiss: () -> Unit) {
             }
         },
     )
+}
+
+/**
+ * The active receiver's transport, so the remote can drive whichever one is connected without
+ * every caller branching. Chromecast and DLNA expose the same control surface.
+ */
+private interface CastTransportControls {
+    val playback: StateFlow<CastPlaybackState?>
+    fun play()
+    fun pause()
+    fun seekTo(positionMs: Long)
+    fun setVolume(volume: Float)
+    fun setMuted(muted: Boolean)
+    fun disconnect()
+}
+
+private val chromecastControls = object : CastTransportControls {
+    override val playback get() = CastPlatform.playback
+    override fun play() = CastPlatform.play()
+    override fun pause() = CastPlatform.pause()
+    override fun seekTo(positionMs: Long) = CastPlatform.seekTo(positionMs)
+    override fun setVolume(volume: Float) = CastPlatform.setVolume(volume)
+    override fun setMuted(muted: Boolean) = CastPlatform.setMuted(muted)
+    override fun disconnect() = CastPlatform.disconnect()
+}
+
+private val dlnaControls = object : CastTransportControls {
+    override val playback get() = DlnaPlatform.playback
+    override fun play() = DlnaPlatform.play()
+    override fun pause() = DlnaPlatform.pause()
+    override fun seekTo(positionMs: Long) = DlnaPlatform.seekTo(positionMs)
+    override fun setVolume(volume: Float) = DlnaPlatform.setVolume(volume)
+    override fun setMuted(muted: Boolean) = DlnaPlatform.setMuted(muted)
+    override fun disconnect() = DlnaPlatform.disconnect()
+}
+
+/**
+ * The phone as a remote for whatever is playing on the television.
+ *
+ * Shown in place of the picker once a receiver is connected: reopening the cast button while
+ * casting is how you reach the controls, which is what every other casting app does and what
+ * the picker alone could not offer.
+ */
+@Composable
+fun CastRemoteDialog(
+    onDismiss: () -> Unit,
+    onSwitchDevice: () -> Unit,
+) {
+    val castConnection by CastPlatform.connection.collectAsState()
+    val dlnaConnection by DlnaPlatform.connection.collectAsState()
+
+    val castDevice = (castConnection as? CastConnectionState.Connected)?.device
+    val dlnaDevice = (dlnaConnection as? DlnaConnectionState.Connected)?.device
+    val controls = if (castDevice != null) chromecastControls else dlnaControls
+    val deviceName = castDevice?.name ?: dlnaDevice?.name ?: "your TV"
+
+    val playback by controls.playback.collectAsState()
+    val status = playback
+
+    // While a finger is down the slider follows it, not the receiver: status updates arrive
+    // every second or so and would otherwise yank the thumb back mid-drag.
+    var scrubbingTo by remember { mutableStateOf<Float?>(null) }
+    val durationMs = status?.durationMs ?: 0L
+    val positionMs = status?.positionMs ?: 0L
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Casting to $deviceName") },
+        text = {
+            Column {
+                status?.title?.let {
+                    Text(it, style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                when {
+                    status == null -> Text("Nothing is loaded on the TV yet.")
+                    status.isBuffering -> Text("Buffering…", style = MaterialTheme.typography.bodySmall)
+                    else -> Text(
+                        "${formatTime(scrubbingTo?.toLong() ?: positionMs)} / ${formatTime(durationMs)}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+
+                // A live stream has no meaningful duration, so there is nothing to scrub over.
+                if (durationMs > 0) {
+                    Slider(
+                        value = (scrubbingTo ?: positionMs.toFloat()).coerceIn(0f, durationMs.toFloat()),
+                        onValueChange = { scrubbingTo = it },
+                        onValueChangeFinished = {
+                            scrubbingTo?.let { controls.seekTo(it.toLong()) }
+                            scrubbingTo = null
+                        },
+                        valueRange = 0f..durationMs.toFloat(),
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = {
+                        controls.seekTo((positionMs - 10_000).coerceAtLeast(0L))
+                    }) { Text("−10s") }
+
+                    TextButton(onClick = {
+                        if (status?.isPlaying == true) controls.pause() else controls.play()
+                    }) { Text(if (status?.isPlaying == true) "Pause" else "Play") }
+
+                    TextButton(onClick = {
+                        val target = positionMs + 10_000
+                        controls.seekTo(if (durationMs > 0) target.coerceAtMost(durationMs) else target)
+                    }) { Text("+10s") }
+                }
+
+                Spacer(Modifier.height(4.dp))
+                Text("Volume", style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = {
+                        controls.setMuted(!(status?.isMuted ?: false))
+                    }) { Text(if (status?.isMuted == true) "Unmute" else "Mute") }
+                    Slider(
+                        value = (status?.volume ?: 1f).coerceIn(0f, 1f),
+                        onValueChange = { controls.setVolume(it) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                CastDelivery.cancel()
+                controls.disconnect()
+                onDismiss()
+            }) { Text("Stop casting") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onSwitchDevice) { Text("Switch device") }
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+        },
+    )
+}
+
+/** `h:mm:ss` past an hour, `m:ss` below it. Milliseconds in, never negative out. */
+private fun formatTime(millis: Long): String {
+    val total = (millis / 1000).coerceAtLeast(0L)
+    val hours = total / 3600
+    val minutes = (total % 3600) / 60
+    val seconds = total % 60
+    return if (hours > 0) {
+        "$hours:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
+    } else {
+        "$minutes:${seconds.toString().padStart(2, '0')}"
+    }
 }
 
 /**
