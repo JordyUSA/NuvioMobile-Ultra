@@ -116,28 +116,46 @@ jobs:
     - name: Create local.properties
       run: touch local.properties
 
-    # Fail fast with readable Kotlin diagnostics before handing off to xcodebuild,
-    # which would otherwise bury compiler errors inside the Gradle build-phase log.
-    # Capped well under the job ceiling on purpose: this step is where a memory-starved
-    # native link stalls, and a stall here used to consume the entire job budget before
-    # anything reported it. With the heaps sized correctly the link is minutes, not hours,
-    # so overrunning this means the machine is thrashing again — worth failing fast to say so
-    # rather than paying for another five-hour runner.
+    # Debug, not release, and that is a hardware decision rather than a preference. The
+    # release linker runs LLVM whole-program optimization, whose live heap does not fit in
+    # this runner's 7 GB: given 16 GB it grew into swap and produced no output for five and a
+    # half hours, given 4 GB it died at once with OutOfMemoryError. A bigger machine would
+    # solve it, but every larger-runner label — macos-latest-large, macos-15-large,
+    # macos-latest-xlarge — is refused on this account, so there is no bigger machine to
+    # move to. The debug linker skips that optimization pass entirely and finishes in
+    # minutes inside the memory available.
+    #
+    # The cost is real and worth stating: Kotlin and Compose code runs slower in the
+    # resulting app, and the binary is larger. Switch both this task and the xcodebuild
+    # configuration below back to Release if the build ever gains the memory to do it.
+    #
+    # Fail fast with readable Kotlin diagnostics before handing off to xcodebuild, which
+    # would otherwise bury compiler errors inside the Gradle build-phase log. The ceiling is
+    # far below the job's: overrunning it means memory is short again, which is worth
+    # reporting in minutes rather than discovering after hours of billing.
     - name: Compile Kotlin iOS framework
       timeout-minutes: 90
-      run: ./gradlew :composeApp:linkReleaseFrameworkIosArm64
+      run: ./gradlew :composeApp:linkDebugFrameworkIosArm64
 
     # There is no Podfile in this project: iosApp.xcodeproj is built directly, and its
-    # build phase invokes :composeApp:embedAndSignAppleFrameworkForXcode itself.
+    # build phase invokes :composeApp:embedAndSignAppleFrameworkForXcode itself. That build
+    # phase picks the Gradle link task from Xcode's own CONFIGURATION, so this has to say
+    # Debug to match the task run above — asking for Release here would send it back to the
+    # release link that cannot complete on this runner.
+    #
+    # ONLY_ACTIVE_ARCH is forced off because Debug configurations conventionally enable it,
+    # and an archive built for a generic iOS destination must contain arm64 rather than
+    # whatever the runner happens to be.
     - name: Archive app (unsigned)
       run: |
         xcodebuild \
           -project iosApp/iosApp.xcodeproj \
           -scheme iosApp \
-          -configuration Release \
+          -configuration Debug \
           -derivedDataPath ios-build/DerivedData \
           -destination 'generic/platform=iOS' \
           -archivePath ios-build/NuvioMobile.xcarchive \
+          ONLY_ACTIVE_ARCH=NO \
           CODE_SIGNING_ALLOWED=NO \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGN_IDENTITY="" \
@@ -175,6 +193,10 @@ jobs:
         echo "The IPA file is ready for download from the Artifacts section." >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "This build is **unsigned** — your sideloading tool signs it with your own account." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "It is also a **debug** build: the release linker's memory needs exceed the 7 GB" >> $GITHUB_STEP_SUMMARY
+        echo "of a macos-latest runner, and larger runners are not available to this account." >> $GITHUB_STEP_SUMMARY
+        echo "Expect the Kotlin and Compose layers to run slower than a release build would." >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Sideloading Instructions:" >> $GITHUB_STEP_SUMMARY
         echo "1. Download the IPA file from artifacts" >> $GITHUB_STEP_SUMMARY
