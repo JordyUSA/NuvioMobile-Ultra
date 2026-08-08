@@ -30,12 +30,6 @@ final class CastLocalServer {
     }
 
     private let queue = DispatchQueue(label: "cast-local-server")
-    private let sessionDelegateQueue: OperationQueue = {
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 4
-        return queue
-    }()
-
     private var listener: NWListener?
     private let routesLock = NSLock()
     private var routes: [String: Payload] = [:]
@@ -273,7 +267,15 @@ final class CastLocalServer {
             connection.cancel()
             return
         }
-        connection.send(content: chunk, completion: .contentProcessed { [weak self] _ in
+        connection.send(content: chunk, completion: .contentProcessed { [weak self] error in
+            // Stop reading once the socket is gone. The receiver closes a range connection as
+            // soon as it has what it asked for, and without this the file kept being read to
+            // its end into a connection nobody was listening to.
+            guard error == nil else {
+                try? handle.close()
+                connection.cancel()
+                return
+            }
             self?.streamFile(handle: handle, remaining: remaining - Int64(chunk.count), connection: connection)
         })
     }
@@ -289,7 +291,15 @@ final class CastLocalServer {
         headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
         if let rangeHeader { request.setValue(rangeHeader, forHTTPHeaderField: "Range") }
 
-        let session = URLSession(configuration: .ephemeral, delegate: nil, delegateQueue: sessionDelegateQueue)
+        // One delegate queue per transfer. Sharing a single four-slot queue across every
+        // transfer was enough to break casting outright about a minute in: the receiver opens
+        // a fresh ranged request for each chunk it buffers and abandons the previous one, and
+        // a delegate holds its slot while a chunk is handed to the socket, so a few ranges
+        // filled the queue and the transfer that was actually feeding the television starved.
+        let delegateQueue = OperationQueue()
+        delegateQueue.maxConcurrentOperationCount = 1
+        let session = URLSession(configuration: .ephemeral, delegate: nil, delegateQueue: delegateQueue)
+
         let streamer = ProxyStreamer(
             contentType: contentType,
             headOnly: headOnly,
@@ -301,14 +311,36 @@ final class CastLocalServer {
                 )
             },
             onData: { data, ready in
-                connection.send(content: data, completion: .contentProcessed { _ in ready() })
+                connection.send(content: data, completion: .contentProcessed { error in
+                    // Nothing is listening any more: drop the fetch behind it rather than
+                    // pulling the rest of the file across the network for a dead socket.
+                    if error != nil { session.invalidateAndCancel() }
+                    ready()
+                })
             },
-            onFinish: { connection.cancel() }
+            onFinish: {
+                connection.cancel()
+                session.finishTasksAndInvalidate()
+            }
         )
 
         let task = session.dataTask(with: request)
         task.delegate = streamer
         streamer.retain(task)
+
+        // The receiver hangs up the moment it has the range it wanted. Cancelling the upstream
+        // fetch with it is what keeps abandoned downloads from accumulating and competing for
+        // bandwidth with the request that replaced them. Installed before `resume` so a
+        // connection that has already gone is caught too.
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .cancelled, .failed:
+                session.invalidateAndCancel()
+            default:
+                break
+            }
+        }
+
         task.resume()
     }
 

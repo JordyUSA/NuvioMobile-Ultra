@@ -37,6 +37,9 @@ final class CastBridge: NSObject, CastIosBridge {
     /// Devices are addressed by `deviceID` across the bridge, so the SDK objects stay here.
     private var knownDevices: [String: GCKDevice] = [:]
 
+    /// What `publishDevices` last handed to Kotlin, so an unchanged list is not republished.
+    private var lastPublishedDevices = ""
+
     private var sessionManager: GCKSessionManager { GCKCastContext.sharedInstance().sessionManager }
     private var discoveryManager: GCKDiscoveryManager { GCKCastContext.sharedInstance().discoveryManager }
 
@@ -297,6 +300,13 @@ final class CastBridge: NSObject, CastIosBridge {
                 )
             )
         }
+        // The SDK reports a single change through more than one delegate callback, so this
+        // used to run — and log, and cross into Kotlin — two or three times for the same list.
+        // Comparing against what was last published keeps that to once per real change.
+        let signature = devices.map { "\($0.id)|\($0.name)|\($0.hasVideoOutput)" }.joined(separator: ";")
+        guard signature != lastPublishedDevices else { return }
+        lastPublishedDevices = signature
+
         CastDiagnostics.shared.log(
             tag: "Cast",
             message: "SDK device list: \(devices.count) — \(devices.map { $0.name }.joined(separator: ", "))"

@@ -384,23 +384,32 @@ fun CastRemoteDialog(
                     )
                 }
 
+                // Transport commands need a media session on the receiver. Sent without one
+                // they come back as INVALID_REQUEST and the SDK complains about being called
+                // with no media status, so the controls are simply inert until media loads.
+                val hasMedia = status != null
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = {
-                        controls.seekTo((positionMs - 10_000).coerceAtLeast(0L))
-                    }) { Text("−10s") }
+                    TextButton(
+                        enabled = hasMedia,
+                        onClick = { controls.seekTo((positionMs - 10_000).coerceAtLeast(0L)) },
+                    ) { Text("−10s") }
 
-                    TextButton(onClick = {
-                        if (status?.isPlaying == true) controls.pause() else controls.play()
-                    }) { Text(if (status?.isPlaying == true) "Pause" else "Play") }
+                    TextButton(
+                        enabled = hasMedia,
+                        onClick = { if (status?.isPlaying == true) controls.pause() else controls.play() },
+                    ) { Text(if (status?.isPlaying == true) "Pause" else "Play") }
 
-                    TextButton(onClick = {
-                        val target = positionMs + 10_000
-                        controls.seekTo(if (durationMs > 0) target.coerceAtMost(durationMs) else target)
-                    }) { Text("+10s") }
+                    TextButton(
+                        enabled = hasMedia,
+                        onClick = {
+                            val target = positionMs + 10_000
+                            controls.seekTo(if (durationMs > 0) target.coerceAtMost(durationMs) else target)
+                        },
+                    ) { Text("+10s") }
                 }
 
                 Spacer(Modifier.height(4.dp))
