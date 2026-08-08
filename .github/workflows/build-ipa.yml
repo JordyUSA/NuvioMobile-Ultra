@@ -84,11 +84,16 @@ jobs:
     # thrashes: the release link took 1h20m on the run that passed and then stopped finishing
     # at all, producing no output for five and a half hours before the job timed out.
     #
-    # The release linker's real appetite has been bracketed by experiment: 16 GB let it grow
-    # into swap and stall forever, 4 GB made it die instantly with OutOfMemoryError. So it
-    # needs more than 4 GB of live heap and the budget here is 7 GB of physical RAM, most of
-    # which has to go to the linker — everything else is squeezed to the minimum that still
-    # works, and parallelism is off so no second worker competes for the same memory.
+    # These numbers are for the debug link, and the split is nothing like what release needed.
+    # Release demanded so much for the linker that everything else was starved down to 1 GB —
+    # at which point Gradle's own daemon spent its time in garbage collection and shut itself
+    # down with "the JVM garbage collector is thrashing" before compilation even finished.
+    # The debug linker needs a fraction of release's memory, so the budget goes back to
+    # Gradle, which is what actually needs it to configure a project this size.
+    #
+    # Neither phase can exceed physical memory: roughly 5 GB while compiling (Gradle plus the
+    # Kotlin daemon) and 6 GB while linking (Gradle plus the native compiler), against 7 GB
+    # available, and those are ceilings rather than reservations.
     #
     # GRADLE_USER_HOME/gradle.properties outranks the project's own file, so this overrides
     # the workstation values without touching them for local development.
@@ -96,10 +101,10 @@ jobs:
       run: |
         mkdir -p ~/.gradle
         cat >> ~/.gradle/gradle.properties <<'EOF'
-        org.gradle.jvmargs=-Xmx1g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8
-        kotlin.daemon.jvmargs=-Xmx1200m
-        kotlin.native.jvmArgs=-Xmx5g
-        org.gradle.workers.max=1
+        org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+        kotlin.daemon.jvmargs=-Xmx2g
+        kotlin.native.jvmArgs=-Xmx3g
+        org.gradle.workers.max=2
         EOF
         cat ~/.gradle/gradle.properties
 
