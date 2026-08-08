@@ -798,10 +798,11 @@ private fun PlayerScreenRuntime.RenderCastPicker() {
         )
     }
 
-    // Belt and braces for the sessions the user did not start from the picker: the Cast SDK
-    // resumes a previous session by itself at launch, and the phone must not keep playing
-    // underneath that either.
-    LaunchedEffect(isCasting) { if (isCasting) playerController?.pause() }
+    // Deliberately not "pause whenever a session exists". The Cast SDK silently resumes the
+    // previous run's session at launch, so that rule paused every stream the moment it opened,
+    // with nothing on the television and no way to tell why. Pausing belongs to the two moments
+    // the user actually handed playback over: picking a device above, and delivery landing on
+    // the receiver below.
 
     val castRequest = remember(sourceUrl, title, activeStreamTitle) {
         CastStreamRequest(
