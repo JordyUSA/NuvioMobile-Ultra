@@ -201,6 +201,13 @@ actual object CastDelivery {
     }
 
     fun onTranscodeCompleted(success: Boolean, message: String?) {
+        // ffmpeg's own reason, which was being discarded. "Could not repackage this file" is
+        // all the user needs, but it told whoever had to fix it nothing at all — a conversion
+        // rejected in under three seconds is an argument or muxer problem, and the answer is
+        // in this string.
+        if (!success) {
+            CastDiagnostics.log("Deliver", "conversion failed: ${message?.take(600) ?: "no detail"}")
+        }
         val completion = pendingTranscode ?: return
         pendingTranscode = null
         completion(
@@ -234,13 +241,13 @@ actual object CastDelivery {
                 .contentsOfDirectoryAtPath(directory, error = null)
                 ?.filterIsInstance<String>()
                 .orEmpty()
-            // ffmpeg writes each segment under a temporary name and renames it once closed, so
-            // a segment visible under its final name is a whole one. Two rather than one: a
-            // single segment leaves the receiver with no margin, and the second costs a few
-            // seconds against a conversion that runs for many minutes.
+            // The segment muxer writes each segment in place rather than renaming it into
+            // position, so the newest file on disk is always the one still being written.
+            // Three files therefore means two finished ones, which is the margin the receiver
+            // needs to start on; the playlist itself only lists segments that are complete.
             val playlistWritten = entries.any { it == PLAYLIST_NAME }
-            val finishedSegments = entries.count { it.startsWith("seg") && !it.endsWith(".tmp") }
-            if (playlistWritten && finishedSegments >= 2) return true
+            val segments = entries.count { it.startsWith("seg") && it.endsWith(".ts") }
+            if (playlistWritten && segments >= 3) return true
 
             delay(POLL_INTERVAL_MS)
             waited += POLL_INTERVAL_MS

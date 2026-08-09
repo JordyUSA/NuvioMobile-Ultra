@@ -323,6 +323,12 @@ final class CastTranscoder {
             DispatchQueue.main.async { onProgress(min(max(percent, 0), 100)) }
         }
 
+        // The exact command, because a conversion that fails in seconds fails on its arguments
+        // and there is otherwise no way to see what was actually run. The source URL is
+        // trimmed: it can carry credentials, and its shape is not what is in question here.
+        let redacted = arguments.map { $0.hasPrefix("http") ? "<source-url>" : $0 }
+        CastDiagnostics.shared.log(tag: "Deliver", message: "ffmpeg \(redacted.joined(separator: " "))")
+
         // The return value (the created session) is intentionally not captured — see cancel()
         // above for why nothing here needs its id.
         FFmpegKit.execute(
@@ -380,39 +386,41 @@ final class CastTranscoder {
         arguments += ["-sn"]
 
         if outputPath.hasSuffix(".m3u8") {
-            // HLS, so the receiver can start playing while the rest is still being produced.
+            // Segmented output, so the receiver can start playing while the rest is still
+            // being produced. The previous output was a single MP4 finished with
+            // `+faststart`, which rewrites the whole file at the end to move the index to the
+            // front — worthless until the very last moment, so nothing could reach the
+            // television until an entire film had been converted.
             //
-            // The previous output was a single MP4 finished with `+faststart`, which rewrites
-            // the whole file at the end to move the index to the front. That makes the output
-            // worthless until the very last moment: nothing could be handed to the television
-            // until an entire film had been converted. Here ffmpeg closes a segment every few
-            // seconds and appends it to the playlist, and the receiver plays what exists while
-            // the rest catches up.
+            // Written with the `segment` muxer rather than `hls`, because this FFmpegKit build
+            // does not contain an `hls` muxer at all: its libavformat carries adts, dash,
+            // ipod, matroska, mpegts and segment, and nothing else. Asking for `-f hls` is
+            // rejected outright in about a second, which is exactly what the field logs showed
+            // and is also why the original single-file MP4 never worked — there is no `mp4`
+            // muxer here either.
+            //
+            // `segment` covers the same ground: it closes a segment every few seconds and
+            // writes an m3u8 listing the ones that are finished. `+live` keeps that playlist
+            // updating as they appear and leaves off the end marker until the run completes,
+            // which is what tells the receiver more is still coming. A list size of zero keeps
+            // every entry, so seeking back over what already exists still works.
             let directory = (outputPath as NSString).deletingLastPathComponent
-            // `event` keeps every segment listed, so the viewer can seek back over anything
-            // already produced, and tells the receiver more is still coming.
-            arguments += ["-f", "hls", "-hls_time", "4", "-hls_playlist_type", "event"]
-            // `temp_file` writes each segment under a temporary name and renames it once
-            // complete, so a segment named in the playlist is never half-written when the
-            // receiver asks for it. `independent_segments` lets it start at any segment.
-            arguments += ["-hls_flags", "independent_segments+temp_file"]
-
-            if videoTarget != nil {
-                // Re-encoded video is always H.264/AAC, which every receiver plays as MPEG-TS.
-                arguments += ["-hls_segment_type", "mpegts"]
-                arguments += ["-hls_segment_filename", "\(directory)/seg%05d.ts"]
-            } else {
-                // Copied video keeps whatever codec the source had, and MPEG-TS carries HEVC
-                // poorly; fragmented MP4 holds both.
-                arguments += ["-hls_segment_type", "fmp4"]
-                arguments += ["-hls_fmp4_init_filename", "init.mp4"]
-                arguments += ["-hls_segment_filename", "\(directory)/seg%05d.m4s"]
-            }
-        } else {
-            // Put the index at the front so the receiver can seek without fetching the tail.
-            arguments += ["-movflags", "+faststart"]
+            arguments += ["-f", "segment", "-segment_time", "4"]
+            // MPEG-TS for every case: it carries H.264 and HEVC alike, and the fragmented-MP4
+            // alternative needs the muxer this build lacks.
+            arguments += ["-segment_format", "mpegts"]
+            arguments += ["-segment_list_type", "m3u8"]
+            arguments += ["-segment_list", outputPath]
+            arguments += ["-segment_list_size", "0"]
+            arguments += ["-segment_list_flags", "+live"]
+            // The final argument is the segment pattern, not the playlist: the playlist is
+            // named by -segment_list above.
+            arguments += ["-y", "\(directory)/seg%05d.ts"]
+            return arguments
         }
 
+        // Put the index at the front so the receiver can seek without fetching the tail.
+        arguments += ["-movflags", "+faststart"]
         arguments += ["-y", outputPath]
 
         return arguments
