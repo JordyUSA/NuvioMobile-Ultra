@@ -365,9 +365,19 @@ final class CastLocalServer {
         delegateQueue.maxConcurrentOperationCount = 1
         let session = URLSession(configuration: .ephemeral, delegate: nil, delegateQueue: delegateQueue)
 
+        // Where the receiver wants the bytes to start, so the streamer can honour it even if
+        // the origin will not.
+        let requestedStart: Int64 = {
+            guard let rangeHeader, rangeHeader.hasPrefix("bytes=") else { return 0 }
+            let spec = rangeHeader.dropFirst("bytes=".count)
+            let first = spec.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+            return Int64(first.trimmingCharacters(in: .whitespaces)) ?? 0
+        }()
+
         let streamer = ProxyStreamer(
             contentType: contentType,
             headOnly: headOnly,
+            requestedStart: requestedStart,
             onResponse: { [weak self] status, reason, contentLength, contentRange, ready in
                 self?.log("← \(status) upstream for \(context.described), length \(contentLength.map(String.init) ?? "unknown")")
                 self?.sendHeaders(
@@ -390,6 +400,9 @@ final class CastLocalServer {
             onFinish: {
                 connection.cancel()
                 session.finishTasksAndInvalidate()
+            },
+            onLog: { [weak self] message in
+                self?.log("\(context.described): \(message)")
             }
         )
 
@@ -466,23 +479,34 @@ private final class ProxyStreamer: NSObject, URLSessionDataDelegate, URLSessionT
 
     private let contentType: String
     private let headOnly: Bool
+    /// Where the receiver asked the response to begin, or 0 when it asked for the whole thing.
+    private let requestedStart: Int64
     private let onResponse: (Int, String, Int64?, String?, @escaping () -> Void) -> Void
     private let onData: (Data, @escaping () -> Void) -> Void
     private let onFinish: () -> Void
+    private let onLog: (String) -> Void
     private var retainedTask: URLSessionTask?
+
+    /// Bytes still to be thrown away before the receiver's range begins, when the origin
+    /// ignored the range and started from zero.
+    private var bytesToSkip: Int64 = 0
 
     init(
         contentType: String,
         headOnly: Bool,
+        requestedStart: Int64,
         onResponse: @escaping (Int, String, Int64?, String?, @escaping () -> Void) -> Void,
         onData: @escaping (Data, @escaping () -> Void) -> Void,
-        onFinish: @escaping () -> Void
+        onFinish: @escaping () -> Void,
+        onLog: @escaping (String) -> Void
     ) {
         self.contentType = contentType
         self.headOnly = headOnly
+        self.requestedStart = requestedStart
         self.onResponse = onResponse
         self.onData = onData
         self.onFinish = onFinish
+        self.onLog = onLog
     }
 
     func retain(_ task: URLSessionTask) {
@@ -491,10 +515,33 @@ private final class ProxyStreamer: NSObject, URLSessionDataDelegate, URLSessionT
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         let http = response as? HTTPURLResponse
-        let status = http?.statusCode ?? 200
+        var status = http?.statusCode ?? 200
+        var length = response.expectedContentLength >= 0 ? response.expectedContentLength : nil
+        var contentRange = http?.value(forHTTPHeaderField: "Content-Range")
+        let acceptRanges = http?.value(forHTTPHeaderField: "Accept-Ranges") ?? "absent"
+        onLog("upstream \(status), accept-ranges=\(acceptRanges), length=\(length.map(String.init) ?? "unknown")")
+
+        // The origin ignored the range and started from the beginning. Passing that straight
+        // through hands the receiver the head of the file when it asked for a byte deep inside
+        // it — which is exactly how a Chromecast fails on an MP4 whose index sits at the end:
+        // it requests the tail, is given the start, cannot find the index, and gives up.
+        //
+        // Honour the range here instead, by discarding everything before it. That costs the
+        // bytes being thrown away, so it is worth saying when the amount is large.
+        if requestedStart > 0 && status == 200 {
+            bytesToSkip = requestedStart
+            status = 206
+            if let total = length, total > requestedStart {
+                contentRange = "bytes \(requestedStart)-\(total - 1)/\(total)"
+                length = total - requestedStart
+            } else {
+                contentRange = nil
+                length = nil
+            }
+            onLog("origin ignored the range; skipping \(requestedStart) bytes to honour it")
+        }
+
         let reason = status == 206 ? "Partial Content" : "OK"
-        let length = response.expectedContentLength >= 0 ? response.expectedContentLength : nil
-        let contentRange = http?.value(forHTTPHeaderField: "Content-Range")
 
         if headOnly {
             onResponse(status, reason, length, contentRange) { [weak self] in
@@ -513,10 +560,19 @@ private final class ProxyStreamer: NSObject, URLSessionDataDelegate, URLSessionT
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        var payload = data
+        // Drop whatever falls before the range the receiver asked for.
+        if bytesToSkip > 0 {
+            let dropped = min(bytesToSkip, Int64(payload.count))
+            bytesToSkip -= dropped
+            payload = payload.subdata(in: payload.startIndex.advanced(by: Int(dropped))..<payload.endIndex)
+            if payload.isEmpty { return }
+        }
+
         // Applies backpressure: the delegate queue (and therefore further didReceive calls)
         // blocks until the chunk has actually been handed to the socket.
         let gate = DispatchSemaphore(value: 0)
-        onData(data) { gate.signal() }
+        onData(payload) { gate.signal() }
         gate.wait()
     }
 
