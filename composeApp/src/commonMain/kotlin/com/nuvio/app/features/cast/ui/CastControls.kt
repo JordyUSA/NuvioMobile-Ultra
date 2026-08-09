@@ -227,20 +227,25 @@ fun CastDevicePickerDialog(
                 failureMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         },
+        // Closing is the confirm action, always. With "Stop casting" in that slot and no plain
+        // way out, dismissing the dialog meant ending the session — which is what the logs
+        // showed happening over and over, a disconnect within a fraction of a second of the
+        // picker closing. Stopping is still one tap, just not the one that means "done".
         confirmButton = {
-            if (connectedName != null) {
-                TextButton(onClick = {
-                    CastDelivery.cancel()
-                    CastPlatform.disconnect()
-                    DlnaPlatform.disconnect()
-                    onDismiss()
-                }) { Text("Stop casting") }
-            } else {
-                TextButton(onClick = onDismiss) { Text("Close") }
-            }
+            TextButton(onClick = onDismiss) { Text("Done") }
         },
         dismissButton = {
-            TextButton(onClick = { showDiagnostics = true }) { Text("Diagnostics") }
+            Row {
+                if (connectedName != null) {
+                    TextButton(onClick = {
+                        CastDelivery.cancel()
+                        CastPlatform.disconnect()
+                        DlnaPlatform.disconnect()
+                        onDismiss()
+                    }) { Text("Stop casting") }
+                }
+                TextButton(onClick = { showDiagnostics = true }) { Text("Diagnostics") }
+            }
         },
     )
 
