@@ -1,5 +1,6 @@
 import Foundation
 import ffmpegkit
+import ComposeApp
 
 /// Turns a source the receiver cannot play into one it can — the iOS counterpart of
 /// `FFmpegCastMediaProcessor` (Android).
