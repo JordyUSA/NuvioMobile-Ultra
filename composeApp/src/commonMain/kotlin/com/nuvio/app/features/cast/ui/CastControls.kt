@@ -401,14 +401,36 @@ fun CastDeliveryEffect(
     // early, leaving the newly picked receiver black.
     var lastDelivered by remember { mutableStateOf<Pair<String, String>?>(null) }
 
+    // A dropped session leaves the receiver with nothing loaded, so what was delivered before
+    // has to be forgotten — otherwise reconnecting to the same television with the same title
+    // matches the guard below and never reloads it, leaving a connected receiver sitting empty
+    // while the controls send commands against a media session that no longer exists.
+    LaunchedEffect(receiverId) {
+        if (receiverId == null) lastDelivered = null
+    }
+
     // The work runs in LaunchedEffect's own scope, so leaving the player cancels an in-flight
     // transcode rather than leaving it running against a discarded composition.
     LaunchedEffect(receiverId, request?.url) {
-        val target = request ?: return@LaunchedEffect
-        val receiver = receiverId ?: return@LaunchedEffect
+        val target = request
+        val receiver = receiverId
+        // Silence here was impossible to tell apart from a delivery that ran and failed, which
+        // cost a round of testing to work out; say which of the preconditions was missing.
+        if (target == null) {
+            CastDiagnostics.log("Deliver", "not started: no stream in the player yet")
+            return@LaunchedEffect
+        }
+        if (receiver == null) {
+            CastDiagnostics.log("Deliver", "not started: no receiver connected")
+            return@LaunchedEffect
+        }
         val delivery = receiver to target.url
-        if (lastDelivered == delivery) return@LaunchedEffect
+        if (lastDelivered == delivery) {
+            CastDiagnostics.log("Deliver", "already delivered this stream to this receiver")
+            return@LaunchedEffect
+        }
         lastDelivered = delivery
+        CastDiagnostics.log("Deliver", "starting for $receiver")
         onFinished(CastDelivery.cast(target))
     }
 }

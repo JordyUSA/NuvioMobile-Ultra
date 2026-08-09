@@ -93,8 +93,15 @@ final class CastBridge: NSObject, CastIosBridge {
         bridge.discoveryManager.add(bridge)
         CastBridgeRegistrationKt.registerCastBridge(bridge: bridge)
 
+        // The app's own build goes in too. Reading a diagnostics log without knowing which
+        // build produced it wasted a round of testing: a missing line could equally mean the
+        // code was not reached or that the build predates the line existing.
+        let info = Bundle.main.infoDictionary
+        let shortVersion = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
         bridge.environmentSummary =
-            "SDK \(kGCKFrameworkVersion) · iOS \(UIDevice.current.systemVersion) · " +
+            "app \(shortVersion) (\(build)) · SDK \(kGCKFrameworkVersion) · " +
+            "iOS \(UIDevice.current.systemVersion) · " +
             (Bundle.main.bundleIdentifier ?? "unknown bundle")
         CastDiagnostics.shared.log(tag: "Cast", message: "installed — \(bridge.environmentSummary)")
         return bridge
